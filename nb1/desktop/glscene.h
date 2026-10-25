@@ -88,7 +88,7 @@ static const char *VS =
     "void main(){ vPos = aPos; vUV = aUV; gl_Position = uMVP * vec4(aPos, 1.0); }\n";
 static const char *FS =
     "#version 330 core\n"
-    "in vec3 vPos; in vec2 vUV; uniform sampler2D uTex; uniform int uMode; uniform vec4 uBox; out vec4 oCol;\n"
+    "in vec3 vPos; in vec2 vUV; uniform sampler2D uTex; uniform int uMode; uniform vec4 uBox; uniform vec4 uFadeC; uniform vec4 uFadeCol; out vec4 oCol;\n"
     "void main(){\n"
     "  if (uMode == 3) { oCol = vec4(uBox.rgb, 1.0); return; }        /* ruler lines */\n"
     "  vec2 tc = vUV;\n"
@@ -98,6 +98,7 @@ static const char *FS =
     "    if (tc.x < 0.0 || tc.x >= 1.0 || tc.y < 0.0 || tc.y >= 1.0) discard;\n"
     "  }\n"
     "  vec4 t = texture(uTex, tc);\n"
+    "  if (uMode == 5) { if (t.a < 0.5) discard; float dd = uBox.z > 0.5 ? abs(atan(vPos.x, -vPos.z)) : distance(vPos, uFadeC.xyz); float f = smoothstep(uBox.x, uBox.y, dd); oCol = vec4(mix(t.rgb, uFadeCol.rgb, f), 1.0); return; }   /* surround: fades into the fog colour */\n"
     "  if (t.a < 0.002) discard;\n"
     "  if (uMode == 4) { if (t.a < 0.5) discard; oCol = vec4(t.rgb, 1.0); return; }   /* ruler labels */\n"
     "  if (uMode == 2) oCol = vec4(0.5, 0.5, 0.5, 1.0); else oCol = vec4(t.rgb, 1.0);\n"
@@ -166,7 +167,7 @@ static Nb1State *poll_state(Source *s, unsigned *frame) {
 
 /* ---------------------------------------------------------------- scene geometry for GL */
 typedef struct { float x, y, z, u, v; } Vtx;
-typedef struct { int first, count, mode; GLuint tex, shadow_tex; int box[4]; } Draw;
+typedef struct { int first, count, mode; GLuint tex, shadow_tex; int box[4]; float fc[4], fcol[4], fr[2], fkind; } Draw;     /* mode 5 (surround): fade centre, fog colour, fade radii */
 
 typedef struct { int first, count, hud; float col[3]; } Ruler;                       /* a ruler = a run of GL_LINES vertices */
 typedef struct { double pos[3]; int right_align, hud, ruler; GLuint tex; int tw, th; float tint[3]; } Label;   /* billboard text anchored in the world */
@@ -175,7 +176,7 @@ typedef struct {
     Nb1Scene scene; int32_t *ids; int loaded;
     Draw *draws; int ndraws; Vtx *verts; int nverts, capverts;
     int *order;                      /* item indices sorted by arcade order */
-    Ruler *rulers; int nrulers; Vtx *rverts; int nrverts, caprverts; Label *labels; int nlabels; double zs; int no_rulers;   /* metre rulers beside each depth layer */
+    Ruler *rulers; int nrulers; Vtx *rverts; int nrverts, caprverts; Label *labels; int nlabels; double zs; int no_rulers; int surround; int scroll_hint[4];   /* metre rulers beside each depth layer */
 } GlScene;
 
 static void push_vtx(GlScene *g, double x, double y, double z, double u, double v) {
@@ -223,6 +224,18 @@ static int item_polygon(const Nb1Item *it, double far, double (*P)[3]) {
     return n;
 }
 
+#ifndef GL_MIRRORED_REPEAT
+#define GL_MIRRORED_REPEAT 0x8370
+#endif
+static GLuint make_tex_wrap(const uint8_t *rgba, int w, int h, int wrap) {
+    GLuint t; glGenTextures(1, &t); glBindTexture(GL_TEXTURE_2D, t);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+    GLint m = wrap == 1 ? GL_REPEAT : wrap == 2 ? GL_MIRRORED_REPEAT : GL_CLAMP_TO_EDGE;
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR); glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, m); glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, m);
+    return t;
+}
 static GLuint make_tex(const uint8_t *rgba, int w, int h) {
     GLuint t; glGenTextures(1, &t); glBindTexture(GL_TEXTURE_2D, t);
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
@@ -319,13 +332,14 @@ static void gl_scene_free(GlScene *g) {
     for (int i = 0; i < g->ndraws; i++) { if (g->draws[i].tex) glDeleteTextures(1, &g->draws[i].tex); if (g->draws[i].shadow_tex) glDeleteTextures(1, &g->draws[i].shadow_tex); }
     free(g->draws); free(g->verts); free(g->order); free(g->ids);
     if (g->loaded) nb1_scene_free(&g->scene);
-    { double zs_ = g->zs; int nr_ = g->no_rulers; memset(g, 0, sizeof *g); g->zs = zs_; g->no_rulers = nr_; }
+    { double zs_ = g->zs; int nr_ = g->no_rulers, su_ = g->surround, sh_[4]; memcpy(sh_, g->scroll_hint, sizeof sh_); memset(g, 0, sizeof *g); g->zs = zs_; g->no_rulers = nr_; g->surround = su_; memcpy(g->scroll_hint, sh_, sizeof sh_); }
 }
 
 /* CPU half of a scene build (no GL calls, so a worker thread may run it); gl_scene_upload() does the rest on the GL thread */
 static void gl_scene_cpu(GlScene *g, const Nb1State *st, const Nb1Roms *roms, const Nb1Table *tab) {
     gl_scene_free(g);
     nb1_build_scene(st, st, roms, tab, &g->scene); g->loaded = 1;
+    if (g->surround) { memcpy(g->scene.scroll_hint, g->scroll_hint, sizeof g->scene.scroll_hint); nb1_scene_add_surround(&g->scene, st, roms, tab); }
     g->ids = malloc(NB1_W * NB1_H * 4); nb1_visible_map(&g->scene, g->ids);
     int n = g->scene.n; g->draws = calloc(n, sizeof *g->draws); g->order = malloc(n * sizeof *g->order);
     for (int i = 0; i < n; i++) g->order[i] = i;
@@ -333,6 +347,13 @@ static void gl_scene_cpu(GlScene *g, const Nb1State *st, const Nb1Roms *roms, co
     g->ndraws = n;
     for (int i = 0; i < n; i++) {
         const Nb1Item *it = &g->scene.items[i]; Draw *d = &g->draws[i];
+        if (it->kind == NB1_SURROUND) {                                               /* free polygons of the world around the play screen */
+            d->first = g->nverts; d->count = 0; d->mode = 5;
+            for (int pi = 0; pi < it->npolys; pi++) { const Nb1Poly *q = &it->polys[pi]; for (int k = 1; k + 1 < q->n; k++) { int idx[3] = { 0, k, k + 1 }; for (int j = 0; j < 3; j++) { int v = idx[j]; push_vtx(g, q->p[v][0], q->p[v][1], q->p[v][2], q->uv[v][0], q->uv[v][1]); d->count++; } } }
+            for (int k = 0; k < 3; k++) { d->fc[k] = (float)it->fade_c[k]; d->fcol[k] = (float)(it->fade_col[k] / 255.0); }
+            d->fr[0] = it->fade_on ? (float)it->fade_r0 : 1e9f; d->fr[1] = it->fade_on ? (float)it->fade_r1 : 2e9f; d->fkind = it->fade_on == 2 ? 1.0f : 0.0f;
+            continue;
+        }
         double P[16][3]; int m = item_polygon(it, g->scene.far, P);
         d->first = g->nverts; d->count = 0; d->mode = it->has_plane ? 1 : 0;
         d->box[0] = it->x0; d->box[1] = it->y0; d->box[2] = it->w; d->box[3] = it->h;
@@ -349,7 +370,7 @@ static void gl_scene_cpu(GlScene *g, const Nb1State *st, const Nb1Roms *roms, co
 static void gl_scene_upload(GlScene *g) {
     for (int i = 0; i < g->scene.n; i++) {
         const Nb1Item *it = &g->scene.items[i]; Draw *d = &g->draws[i];
-        d->tex = make_tex(it->tex, it->w, it->h);
+        d->tex = it->kind == NB1_SURROUND ? make_tex_wrap(it->tex, it->w, it->h, it->wrap) : make_tex(it->tex, it->w, it->h);
         if (it->shadow) {                                          /* mask of the shadow pens (pen -2) */
             size_t N = (size_t)it->w * it->h; uint8_t *mk = calloc(N, 4);
             for (size_t k = 0; k < N; k++) if (it->pen[k] == -2) mk[k * 4 + 3] = 255;

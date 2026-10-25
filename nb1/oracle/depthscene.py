@@ -187,12 +187,19 @@ def apply_decals(items, table=DEFAULT_TABLE):
 
 
 # ------------------------------------------------------------------ automatic table selection (scene_tables.json)
-def art_pairs(st):
-    """{(layer, tile code)} of the enabled scrolling tilemap layers 0-3: the background art on screen, independent of scroll position."""
+BIG_SPRITE_AREA = 9000          # a sprite entry this big (on screen) is scenery, not an actor: its first tile code joins the scene's art signature as layer 9
+
+def art_pairs(st, sst=None):
+    """{(layer, tile code)}: the enabled scrolling tilemap layers 0-3 (the background art, independent of scroll position) and, with `sst`, the first tile
+    code of every big sprite entry as layer 9 (the tilemaps keep leftovers of earlier scenes behind big sprites, so the tilemaps alone can mislead)."""
     out = set()
     for L in range(4):
         if int(st.ctl[0x10 + L]) & 8: continue
         out |= {(L, int(c)) for c in np.unique(st.vram[R.TM_OFF[L]:R.TM_OFF[L] + 4096])}
+    if sst is not None:
+        for sp in R.sprite_entries(sst):
+            if sp['tiles'] and sp['hsize'] * sp['vsize'] >= BIG_SPRITE_AREA:
+                t = sp['tiles'][0][0]; out.add((9, ((t & 0x7ff) | (int(sst.bank[t >> 11]) << 11)) + sp['offset']))
     return out
 
 def sprite_codes(sst):
@@ -203,29 +210,48 @@ def sprite_codes(sst):
             t = sp['tiles'][0][0]; codes.add(((t & 0x7ff) | (int(sst.bank[t >> 11]) << 11)) + sp['offset'])
     return codes
 
+THUMB_ROWS, THUMB_COLS, THUMB_MAX_MAE = 11, 16, 50
+
+def thumb(st, sst, roms):
+    """A coarse picture of the screen above the HUD band: 16 x 11 block averages (integers) of the exact arcade composite.  Two states of one scene are
+    close in it (an actor or two moving changes a few blocks); different scenes are not.  Guards the art-code match: leftovers of earlier scenes
+    stay in the tilemaps, so equal tile codes alone do not prove equal pictures."""
+    im = R.render(st, roms, sst=sst).astype(np.int64)
+    t = np.zeros((THUMB_ROWS, THUMB_COLS, 3), np.int64)
+    for r in range(THUMB_ROWS):
+        for c in range(THUMB_COLS): t[r, c] = im[r * 16:(r + 1) * 16, c * 18:(c + 1) * 18].reshape(-1, 3).sum(0) // (16 * 18)
+    return t
+
 def load_table_set(path):
     """scene_tables.json (+ scene_refs.json beside it).  Entry: {"name", "table", "when": {"codes_all", "codes_any", "art_scenes", "min_similarity"}}.
     Entries with codes_* match exactly; entries with art_scenes match when the state's background art is at least min_similarity (default 0.8,
-    Jaccard on (layer, tile code) pairs) like one of those captured reference scenes.  Codes entries win in order; among art entries the
-    most similar wins."""
+    Jaccard on (layer, tile code) pairs) like one of those captured reference scenes AND (when the reference has a "thumb" and the caller gives ROMs)
+    its picture is close to the reference's.  Codes entries win in order; among art entries the most similar wins."""
     base = os.path.dirname(os.path.abspath(path)); rules = json.load(open(path))
-    rp = os.path.join(base, 'scene_refs.json'); refs = {k: {(int(L), c) for L, cs in v.items() for c in cs} for k, v in json.load(open(rp)).items()} if os.path.exists(rp) else {}
-    return dict(base=base, rules=rules, refs=refs)
+    rp = os.path.join(base, 'scene_refs.json'); refs = {}; thumbs = {}
+    if os.path.exists(rp):
+        for k, v in json.load(open(rp)).items():
+            refs[k] = {(int(L), c) for L, cs in v.items() if L != 'thumb' for c in cs}
+            if 'thumb' in v: thumbs[k] = np.array(v['thumb'], np.int64).reshape(THUMB_ROWS, THUMB_COLS, 3)
+    return dict(base=base, rules=rules, refs=refs, thumbs=thumbs)
 
-def select_table(tset, st, sst=None):
+def select_table(tset, st, sst=None, roms=None):
     """-> (entry name, table dict with '_path') or (None, None)."""
-    sst = sst or st; codes = None; pairs = None; best = None
+    sst = sst or st; codes = None; pairs = None; th = None; best = None
     for r in tset['rules']:
         w = r['when']
         if 'art_scenes' in w:
-            if pairs is None: pairs = art_pairs(st)
-            sim = 0.0
+            if pairs is None: pairs = art_pairs(st, sst)
+            sim = 0.0; need = w.get('min_similarity', 0.8)
             for sid in w['art_scenes']:
                 ref = tset['refs'].get(str(sid))
                 if ref:
-                    u = pairs | ref
-                    sim = max(sim, len(pairs & ref) / len(u) if u else 0.0)
-            if sim >= w.get('min_similarity', 0.8) and (best is None or sim > best[0] + 1e-12): best = (sim, r)
+                    u = pairs | ref; s = len(pairs & ref) / len(u) if u else 0.0
+                    if s >= need and roms is not None and str(sid) in tset['thumbs']:
+                        if th is None: th = thumb(st, sst, roms)
+                        if int(np.abs(th - tset['thumbs'][str(sid)]).sum()) > THUMB_MAX_MAE * th.size: continue      # same tile codes, different picture
+                    sim = max(sim, s)
+            if sim >= need and (best is None or sim > best[0] + 1e-12): best = (sim, r)
         else:
             if codes is None: codes = sprite_codes(sst)
             if all(c in codes for c in w.get('codes_all', [])) and (not w.get('codes_any') or any(c in codes for c in w['codes_any'])):

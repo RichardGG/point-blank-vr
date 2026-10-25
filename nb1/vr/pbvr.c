@@ -117,7 +117,7 @@ typedef struct { int kind, id, pri, has_key, key; } SelItem;     /* what the poi
 /* ------------------------------------------------------------------ options */
 typedef struct {
     char roms[512], ipc[512], table[512], tables[512];
-    double vscale, sdiag, sdist, gun_pitch, aim_yaw, aim_pitch, jump_dist; int no_vr, gaze; char edits_out[512];
+    double vscale, sdiag, sdist, gun_pitch, aim_yaw, aim_pitch, jump_dist; int no_vr, gaze, no_surround; char edits_out[512];
 } Opts;
 
 /* ------------------------------------------------------------------ scene worker: reads states and builds scenes off the render thread */
@@ -126,7 +126,7 @@ typedef struct {
     SDL_mutex *mu; GlScene back; int ready; unsigned back_frame; const char *back_table; int back_scene; double back_sim;
     volatile int quit, paused, rebuild; volatile double zs; Source src;
     OvEntry *ov; int nov, capov;                       /* the editor's edits, guarded by mu */
-    Nb1Selector *selr; const Nb1Table *last_use; Nb1State *last; unsigned last_frame; const char *last_name; int last_scene; double last_sim;   /* the state the current scene came from, so an edit can rebuild it */
+    int prev_scroll[4][2], moving[4]; Nb1Selector *selr; const Nb1Table *last_use; Nb1State *last; unsigned last_frame; const char *last_name; int last_scene; double last_sim;   /* the state the current scene came from, so an edit can rebuild it */
 } Worker;
 
 static int worker_main(void *arg) {
@@ -136,6 +136,11 @@ static int worker_main(void *arg) {
         if (busy) { SDL_Delay(2); continue; }
         unsigned fr = 0; Nb1State *st = w->paused ? NULL : poll_state(&w->src, &fr);
         if (st) {
+            for (int L = 0; L < 4; L++) {                                  /* layers whose scroll registers keep changing are scrolling: their world continues the game's own map */
+                int sx = st->ctl[4 * L + 1] & 0x1ff, sy = st->ctl[4 * L + 3] & 0x1ff;
+                if (sx != w->prev_scroll[L][0] || sy != w->prev_scroll[L][1]) w->moving[L] = 24; else if (w->moving[L] > 0) w->moving[L]--;
+                w->prev_scroll[L][0] = sx; w->prev_scroll[L][1] = sy; w->back.scroll_hint[L] = w->moving[L] > 0;
+            }
             free(w->last); w->last = st; w->last_frame = fr; w->last_name = NULL; w->last_scene = -1; w->last_sim = 0;
             if (w->tset) w->last_scene = nb1_tableset_nearest_scene(w->tset, st, &w->last_sim);
         } else if (w->rebuild && w->last) { /* an edit: build the same state again */ }
@@ -154,7 +159,7 @@ static int worker_main(void *arg) {
         for (int i = 0; i < w->nov && ns < 64; i++) if (w->ov[i].scene == w->last_scene && w->ov[i].s.k != 1.0) specs[ns++] = w->ov[i].s;
         SDL_UnlockMutex(w->mu);
         Nb1Table *scaled = ns ? nb1_table_with_scales(use, specs, ns) : NULL;
-        w->back.zs = w->zs; w->back.no_rulers = 1;
+        w->back.zs = w->zs; w->back.no_rulers = 1; w->back.surround = !w->o->no_surround;
         gl_scene_cpu(&w->back, w->last, w->roms, scaled ? scaled : use); w->back.scene.aim_skip_hud = 1;
         nb1_table_free(scaled);
         SDL_LockMutex(w->mu); w->ready = 1; w->back_frame = w->last_frame; w->back_table = name; w->back_scene = w->last_scene; w->back_sim = w->last_sim; SDL_UnlockMutex(w->mu);
@@ -288,7 +293,7 @@ static void xr_events(Xr *xr) {
 }
 
 /* ------------------------------------------------------------------ drawing */
-typedef struct { GLuint prog; GLint uMVP, uTex, uMode, uBox; GLuint vao, vbo, line_vao, line_vbo; } Gfx;
+typedef struct { GLuint prog; GLint uMVP, uTex, uMode, uBox, uFadeC, uFadeCol; GLuint vao, vbo, line_vao, line_vbo; } Gfx;
 
 static void draw_scene(const Gfx *g, const GlScene *gs, const M4 *mvp) {
     float m[16]; for (int i = 0; i < 16; i++) m[i] = (float)mvp->m[i];
@@ -301,6 +306,7 @@ static void draw_scene(const Gfx *g, const GlScene *gs, const M4 *mvp) {
             if (!d->count || (pass == 1 && !d->shadow_tex)) continue;
             glBindTexture(GL_TEXTURE_2D, pass ? d->shadow_tex : d->tex);
             glUniform1i(g->uMode, pass ? 2 : d->mode); glUniform4f(g->uBox, (float)d->box[0], (float)d->box[1], (float)d->box[2], (float)d->box[3]);
+            if (d->mode == 5) { glUniform4f(g->uBox, d->fr[0], d->fr[1], d->fkind, 0); glUniform4f(g->uFadeC, d->fc[0], d->fc[1], d->fc[2], 0); glUniform4f(g->uFadeCol, d->fcol[0], d->fcol[1], d->fcol[2], 0); }
             glDrawArrays(GL_TRIANGLES, d->first, d->count);
         }
     }
@@ -363,6 +369,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(a, "--viewport-scale") && v) { o.vscale = atof(v); i++; }
         else if (!strcmp(a, "--gun-pitch") && v) { o.gun_pitch = atof(v); i++; }
         else if (!strcmp(a, "--no-vr")) o.no_vr = 1;
+        else if (!strcmp(a, "--no-surround")) o.no_surround = 1;
         else if (!strcmp(a, "--edits-out") && v) { snprintf(o.edits_out, sizeof o.edits_out, "%s", v); i++; }
         else if (!strcmp(a, "--jump-dist") && v) { o.jump_dist = atof(v); i++; }
         else if (!strcmp(a, "--gaze-aim")) o.gaze = 1;                                   /* aim with the head instead of a controller (testing, or no controllers) */
@@ -385,7 +392,7 @@ int main(int argc, char **argv) {
     SDL_GL_SetSwapInterval(0);                                               /* the headset paces the frames, not the mirror */
 
     Gfx gfx; memset(&gfx, 0, sizeof gfx); gfx.prog = program(VS, FS);
-    gfx.uMVP = glGetUniformLocation(gfx.prog, "uMVP"); gfx.uTex = glGetUniformLocation(gfx.prog, "uTex"); gfx.uMode = glGetUniformLocation(gfx.prog, "uMode"); gfx.uBox = glGetUniformLocation(gfx.prog, "uBox");
+    gfx.uMVP = glGetUniformLocation(gfx.prog, "uMVP"); gfx.uTex = glGetUniformLocation(gfx.prog, "uTex"); gfx.uMode = glGetUniformLocation(gfx.prog, "uMode"); gfx.uBox = glGetUniformLocation(gfx.prog, "uBox"); gfx.uFadeC = glGetUniformLocation(gfx.prog, "uFadeC"); gfx.uFadeCol = glGetUniformLocation(gfx.prog, "uFadeCol");
     glGenVertexArrays(1, &gfx.vao); glBindVertexArray(gfx.vao); glGenBuffers(1, &gfx.vbo); glBindBuffer(GL_ARRAY_BUFFER, gfx.vbo);
     glEnableVertexAttribArray(0); glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vtx), (void *)0);
     glEnableVertexAttribArray(1); glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(Vtx), (void *)(3 * sizeof(float)));
@@ -400,7 +407,7 @@ int main(int argc, char **argv) {
     /* scene worker */
     Worker W; memset(&W, 0, sizeof W); W.o = &o; W.roms = &roms; W.deftab = nb1_table_default(); W.mu = SDL_CreateMutex();
     if (o.table[0]) { W.tab = nb1_table_load(o.table); if (!W.tab) fprintf(stderr, "pbvr: cannot load table %s\n", o.table); }
-    else if (o.tables[0]) { W.tset = nb1_tableset_load(o.tables); if (!W.tset) fprintf(stderr, "pbvr: cannot load tables %s\n", o.tables); else W.selr = nb1_selector_new(W.tset, 3); }
+    else if (o.tables[0]) { W.tset = nb1_tableset_load(o.tables); if (!W.tset) fprintf(stderr, "pbvr: cannot load tables %s\n", o.tables); else { nb1_tableset_set_roms(W.tset, &roms); W.selr = nb1_selector_new(W.tset, 3); } }
     snprintf(W.src.ipc, sizeof W.src.ipc, "%s", o.ipc);
     double vw_m = o.sdiag * 0.0254 * 0.8 * o.vscale, zs = (NB1_W * o.sdist / vw_m) / NB1_FOCAL; W.zs = zs;
     SDL_Thread *thr = SDL_CreateThreadWithStackSize(worker_main, "scene", 64 << 20, &W);   /* the scene builder keeps big buffers on the stack; Windows threads default to 1 MB */
@@ -613,7 +620,7 @@ int main(int argc, char **argv) {
                     XrSwapchainImageWaitInfo wi = { XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO }; wi.timeout = XR_INFINITE_DURATION; xrWaitSwapchainImage(E->sc, &wi);
                     pBindFramebuffer(GL_FRAMEBUFFER, E->fbo); pFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, E->img[idx].image, 0);
                     pFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, E->depth);
-                    glViewport(0, 0, E->w, E->h); glClearColor(0.02f, 0.02f, 0.03f, 1); glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+                    glViewport(0, 0, E->w, E->h); if (front.loaded && front.scene.has_clear) glClearColor((float)(front.scene.clear[0] / 255.0), (float)(front.scene.clear[1] / 255.0), (float)(front.scene.clear[2] / 255.0), 1); else glClearColor(0.02f, 0.02f, 0.03f, 1); glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
                     M4 mvp = m4_mul(proj[e], view[e]);
                     if (front.loaded) draw_scene(&gfx, &front, &mvp);
                     if (paused) {

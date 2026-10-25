@@ -49,6 +49,7 @@ typedef struct {
 typedef struct { Match m; double k; } Scale;                    /* "scales": every matching non-HUD item's depth (and plane distance) is multiplied by k */
 
 struct Nb1Table {
+    Json *root;                                      /* the parsed table file (the "surround" section is read from it when a scene is built) */
     int shallow;                                     /* 1 = a copy made by nb1_table_with_scales: shares rules/edits with its parent, owns only `scales` */
     int nscales; Scale *scales;
     double far, z_front, z_back, hud_z, slot_gap; int nrules; Rule *rules;

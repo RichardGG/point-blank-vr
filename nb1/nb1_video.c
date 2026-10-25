@@ -147,6 +147,23 @@ void nb1_tilemap_tex(const Nb1State *st, const Nb1Roms *roms, int i, uint8_t rgb
     free(p); free(o);
 }
 
+/* the whole 64x64-tile map of a scrolling layer, and where the screen window sits in it */
+int nb1_tilemap_map_tex(const Nb1State *st, const Nb1Roms *roms, int i, uint8_t rgb[0x2000][3], uint8_t *rgba, int *ox_out, int *oy_out, int *flip_out) {
+    if (i < 0 || i > 3) return 0;
+    const uint16_t *ctl = st->ctl; int flip = !!(ctl[1] & 0x8000);
+    int sx = ctl[4 * i + 1] & 0x1ff, sy = ctl[4 * i + 3] & 0x1ff; if (flip) { sx = -sx; sy = -sy; }
+    int adj = (int[]){ 4, 2, 1, 0 }[i], dx = 44 + adj, dy = 24;
+    *ox_out = !flip ? sx + dx : -sx + 288 + dx; *oy_out = !flip ? sy + dy : -sy + 224 + 24; *flip_out = flip;
+    int pal_off = ((ctl[0x18 + i] & 7) << 8) + 0x1000; const uint16_t *vr = st->vram + TM_OFF[i];
+    for (int y = 0; y < 512; y++) for (int x = 0; x < 512; x++) {
+        int code = vr[(y / 8) * 64 + x / 8], ty = y % 8, tx = x % 8; size_t c = (size_t)code % roms->nchr, m = (size_t)code % roms->nmask;
+        uint8_t *q = rgba + ((size_t)y * 512 + x) * 4;
+        if ((roms->mask[m * 8 + ty] >> (7 - tx)) & 1) { int idx = (roms->chr[c * 64 + ty * 8 + tx] + pal_off) & 0x1fff; q[0] = rgb[idx][0]; q[1] = rgb[idx][1]; q[2] = rgb[idx][2]; q[3] = 255; }
+        else q[0] = q[1] = q[2] = q[3] = 0;
+    }
+    return 1;
+}
+
 /* ---------------------------------------------------------------- sprites */
 int nb1_sprite_entries(const Nb1State *st, Nb1Entry *out) {
     const uint16_t *ram = st->spriteram;

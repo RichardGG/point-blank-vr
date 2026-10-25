@@ -17,14 +17,14 @@
 /* ---------------------------------------------------------------- app */
 typedef struct {
     char roms[512], ipc[512], statefile[512], table[512], tables[512], shot[512];
-    int w, h, mode, hide_hud, use_table, paused, shot_after, show_help, no_text, shot_game_frame, frames_limit, mouse_x, mouse_y, mouse_set, trigger_set, ruler, aim_hud;
+    int w, h, mode, hide_hud, use_table, paused, shot_after, show_help, no_text, shot_game_frame, frames_limit, mouse_x, mouse_y, mouse_set, trigger_set, ruler, aim_hud, no_surround;
     double vscale, sdiag, sdist;
     double yaw, pitch, dist, focus, focal;
 } Opts;
 
 static void die_usage(void) {
     fprintf(stderr, "usage: pbdesk --roms DIR (--ipc DIR | --state FILE) [--table T.json | --tables scene_tables.json] [--res WxH] [--yaw N] [--pitch N] [--dist N]\n"
-                    "              [--focus N] [--focal N] [--hide-hud] [--no-text] [--no-ruler | --ruler-all] [--aim-hud] [--viewport-scale K] [--screen-diag IN] [--screen-dist M] [--shot out.ppm [--shot-after N | --shot-game-frame N]]\n");
+                    "              [--focus N] [--focal N] [--hide-hud] [--no-text] [--no-ruler | --ruler-all] [--aim-hud] [--no-surround] [--viewport-scale K] [--screen-diag IN] [--screen-dist M] [--shot out.ppm [--shot-after N | --shot-game-frame N]]\n");
     exit(2);
 }
 
@@ -55,6 +55,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(a, "--hide-hud")) o.hide_hud = 1;
         else if (!strcmp(a, "--no-text")) o.no_text = 1;
         else if (!strcmp(a, "--no-ruler")) o.ruler = 0;
+        else if (!strcmp(a, "--no-surround")) o.no_surround = 1;                 /* no world around the play screen */
         else if (!strcmp(a, "--aim-hud")) o.aim_hud = 1;                 /* HUD items can be hit by the gun again */
         else if (!strcmp(a, "--viewport-scale") && i + 1 < argc) o.vscale = atof(argv[++i]);
         else if (!strcmp(a, "--screen-diag") && i + 1 < argc) o.sdiag = atof(argv[++i]);
@@ -76,7 +77,7 @@ int main(int argc, char **argv) {
     if (o.table[0] && !tab) { fprintf(stderr, "pbdesk: cannot read table %s (using the default)\n", o.table); }
     Nb1Table *deftab = nb1_table_default();
     Nb1TableSet *tset = (o.tables[0] && !o.table[0]) ? nb1_tableset_load(o.tables) : NULL;     /* an explicit --table wins */
-    Nb1Selector *selr = NULL;                                                                  /* keeps the table choice stable from frame to frame */
+    int new_state = 1; Nb1Selector *selr = NULL;                                                                  /* keeps the table choice stable from frame to frame */
     if (o.tables[0] && !o.table[0] && !tset) fprintf(stderr, "pbdesk: cannot read %s (using the default table)\n", o.tables);
     const char *table_name = NULL;
 
@@ -91,7 +92,7 @@ int main(int argc, char **argv) {
     if (load_gl()) return 1;
     SDL_GL_SetSwapInterval(o.shot[0] ? 0 : 1);
     GLuint prog = program(VS, FS), prog2 = program(VS2, FS2);
-    GLint uMVP = glGetUniformLocation(prog, "uMVP"), uTex = glGetUniformLocation(prog, "uTex"), uMode = glGetUniformLocation(prog, "uMode"), uBox = glGetUniformLocation(prog, "uBox");
+    GLint uMVP = glGetUniformLocation(prog, "uMVP"), uTex = glGetUniformLocation(prog, "uTex"), uMode = glGetUniformLocation(prog, "uMode"), uBox = glGetUniformLocation(prog, "uBox"), uFadeC = glGetUniformLocation(prog, "uFadeC"), uFadeCol = glGetUniformLocation(prog, "uFadeCol");
     GLint uMVP2 = glGetUniformLocation(prog2, "uMVP"), uTex2 = glGetUniformLocation(prog2, "uTex");
     GLuint vao, vbo; glGenVertexArrays(1, &vao); glBindVertexArray(vao); glGenBuffers(1, &vbo); glBindBuffer(GL_ARRAY_BUFFER, vbo);
     glEnableVertexAttribArray(0); glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vtx), (void *)0);
@@ -165,7 +166,7 @@ int main(int argc, char **argv) {
         if (keys[SDL_SCANCODE_X]) o.focus += 0.1;
 
         /* new game state? */
-        if (!o.paused) { unsigned fr = 0; Nb1State *ns = poll_state(&src, &fr); if (ns) { free(cur); cur = ns; game_frame = fr; dirty = 1; } }
+        if (!o.paused) { unsigned fr = 0; Nb1State *ns = poll_state(&src, &fr); if (ns) { free(cur); cur = ns; game_frame = fr; dirty = 1; new_state = 1; } }
         /* physical viewport: width W at distance D shows the 288 px picture, so one px subtends W/(288 D) and the arcade eye's f = 346 becomes f_eff = 288 D / W */
         const double vw_m = o.sdiag * 0.0254 * 0.8 * o.vscale, feff = NB1_W * o.sdist / vw_m, zs = feff / NB1_FOCAL, fov = 2 * atan(vw_m / (2 * o.sdist)) * 180 / M_PI;
         if (gs.zs != zs) { gs.zs = zs; dirty = 1; }
@@ -173,8 +174,10 @@ int main(int argc, char **argv) {
             Uint64 t0 = SDL_GetPerformanceCounter();
             const Nb1Table *use = deftab; table_name = NULL;
             if (o.use_table && tab) use = tab;
-            else if (o.use_table && tset) { if (!selr) selr = nb1_selector_new(tset, 3); const Nb1Table *sel = nb1_selector_update(selr, cur, cur, &table_name); if (sel) use = sel; else table_name = NULL; }
-            gl_scene_build(&gs, cur, &roms, use); gs.scene.aim_skip_hud = !o.aim_hud;      /* the gun ray passes through HUD items */
+            else if (o.use_table && tset) { if (!selr) { nb1_tableset_set_roms(tset, &roms); selr = nb1_selector_new(tset, 3); } const Nb1Table *sel = nb1_selector_update(selr, cur, cur, &table_name); if (sel) use = sel; else table_name = NULL; }
+            { static int prev_sc[4][2], moving[4]; if (new_state) for (int L = 0; L < 4; L++) { int sx = cur->ctl[4 * L + 1] & 0x1ff, sy = cur->ctl[4 * L + 3] & 0x1ff;
+                if (sx != prev_sc[L][0] || sy != prev_sc[L][1]) moving[L] = 24; else if (moving[L] > 0) moving[L]--; prev_sc[L][0] = sx; prev_sc[L][1] = sy; gs.scroll_hint[L] = moving[L] > 0; } new_state = 0; }
+            gs.surround = !o.no_surround; gl_scene_build(&gs, cur, &roms, use); gs.scene.aim_skip_hud = !o.aim_hud;      /* the gun ray passes through HUD items */
             build_ms = (double)(SDL_GetPerformanceCounter() - t0) * 1000.0 / SDL_GetPerformanceFrequency();
             glBindBuffer(GL_ARRAY_BUFFER, vbo); glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)gs.nverts * sizeof(Vtx), gs.verts, GL_DYNAMIC_DRAW);
             glBindBuffer(GL_ARRAY_BUFFER, vbo3); glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(gs.nrverts ? gs.nrverts : 1) * sizeof(Vtx), gs.rverts, GL_STATIC_DRAW);
@@ -230,7 +233,8 @@ int main(int argc, char **argv) {
         glViewport(0, 0, ww, wh); glClearColor(0.08f, 0.08f, 0.09f, 1); glDisable(GL_SCISSOR_TEST); glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         if (gs.loaded) {
             glViewport(vx, vy, vw, vh); glEnable(GL_SCISSOR_TEST); glScissor(vx, vy, vw, vh);
-            glClearColor(0, 0, 0, 1); glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+            if (gs.scene.has_clear && o.mode == 2) glClearColor((float)(gs.scene.clear[0] / 255.0), (float)(gs.scene.clear[1] / 255.0), (float)(gs.scene.clear[2] / 255.0), 1); else glClearColor(0, 0, 0, 1);      /* the world's fog colour in the orbit view */
+            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
             float mvp[16]; make_mvp(&cam, vw, vh, o.mode == 1 ? 1.0 : zs, mvp);
             glEnable(GL_DEPTH_TEST); glDepthFunc(GL_LEQUAL); glDepthMask(GL_TRUE); glDisable(GL_BLEND); glDisable(GL_CULL_FACE);
             glUseProgram(prog); glUniformMatrix4fv(uMVP, 1, GL_FALSE, mvp); glUniform1i(uTex, 0); glBindVertexArray(vao);
@@ -242,6 +246,7 @@ int main(int argc, char **argv) {
                     if (pass == 1 && !d->shadow_tex) continue;
                     glBindTexture(GL_TEXTURE_2D, pass ? d->shadow_tex : d->tex);
                     glUniform1i(uMode, pass ? 2 : d->mode); glUniform4f(uBox, (float)d->box[0], (float)d->box[1], (float)d->box[2], (float)d->box[3]);
+                    if (d->mode == 5) { glUniform4f(uBox, d->fr[0], d->fr[1], d->fkind, 0); glUniform4f(uFadeC, d->fc[0], d->fc[1], d->fc[2], 0); glUniform4f(uFadeCol, d->fcol[0], d->fcol[1], d->fcol[2], 0); }
                     glDrawArrays(GL_TRIANGLES, d->first, d->count);
                 }
             }

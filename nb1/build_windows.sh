@@ -10,7 +10,7 @@ ZLIB_INC=${ZLIB_INC:-$ZLIB_SRC}; ZLIB_LIB=${ZLIB_LIB:-$ZLIB_SRC/libz.a}; : "${ZL
 OPENXR_INC=${OPENXR_INC:-/usr/include}                      # folder that contains openxr/openxr.h (MSYS2: /mingw64/include)
  OUT=${OUT:-build-win}; mkdir -p "$OUT"
 CC=${CC:-x86_64-w64-mingw32-gcc}
-SRC="nb1_video.c nb1_scene.c nb1_table.c nb1_edits.c nb1_png.c nb1_json.c"
+SRC="nb1_video.c nb1_scene.c nb1_table.c nb1_edits.c nb1_png.c nb1_json.c nb1_surround.c"
 CF="-O2 -std=gnu11 -ffp-contract=off -Wall -Wno-missing-field-initializers -Wno-unused-function -Wno-unused-variable -I$ZLIB_INC -I$SDL2_MINGW/include/SDL2 -I$SDL2_MINGW/include -idirafter $OPENXR_INC"
 $CC $CF -o "$OUT/nb1_tool.exe" $SRC nb1_tool.c "$ZLIB_LIB" -lm
 for t in desktop/pbdesk:pbdesk vr/pbvr:pbvr; do

@@ -117,6 +117,7 @@ static int dump(int argc, char **argv) {
 /* nb1_tool select SCENE_TABLES.json STATE... : print the table name chosen for each state file ("-" = none) */
 static int select_cmd(int argc, char **argv) {
     Nb1TableSet *ts = nb1_tableset_load(argv[2]); if (!ts) { fprintf(stderr, "cannot load %s\n", argv[2]); return 1; }
+    Nb1Roms roms; int have_roms = getenv("PB_ROMS") && !nb1_roms_load(&roms, getenv("PB_ROMS")); if (have_roms) nb1_tableset_set_roms(ts, &roms);      /* PB_ROMS: also compare pictures */
     for (int i = 3; i < argc; i++) {
         Nb1State *st = nb1_state_load(argv[i]); if (!st) { printf("%s\t?\n", argv[i]); continue; }
         const char *name; nb1_tableset_select(ts, st, st, &name); printf("%s\t%s\n", argv[i], name ? name : "-"); free(st);

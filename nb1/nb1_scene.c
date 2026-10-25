@@ -222,7 +222,7 @@ int nb1_build_scene(const Nb1State *st, const Nb1State *sst, const Nb1Roms *roms
     for (int a = 0; a < n; a++) prepare(&items[a]);
     out->items = items; out->n = n; nb1_table_free(own); return 0;
 }
-void nb1_scene_free(Nb1Scene *s) { for (int i = 0; i < s->n; i++) { free(s->items[i].tex); free(s->items[i].pen); free(s->items[i].cust); } free(s->items); memset(s, 0, sizeof *s); }
+void nb1_scene_free(Nb1Scene *s) { for (int i = 0; i < s->n; i++) { free(s->items[i].tex); free(s->items[i].pen); free(s->items[i].cust); free(s->items[i].polys); } free(s->items); memset(s, 0, sizeof *s); }
 
 /* ---------------------------------------------------------------- ray / item */
 /* Plane corners (4 x V3) or 0 when any corner misses the plane. */
@@ -326,8 +326,8 @@ static void render_cam(const Nb1Scene *s, const Nb1Cam *c, uint8_t *rgb, int32_t
     memset(rgb, 0, N * 3);
     int *ord = malloc(s->n * sizeof *ord); for (int i = 0; i < s->n; i++) ord[i] = i;
     for (int i = 1; i < s->n; i++) { int v = ord[i], j = i - 1; while (j >= 0 && s->items[ord[j]].order > s->items[v].order) { ord[j + 1] = ord[j]; j--; } ord[j + 1] = v; }
-    for (int i = 0; i < s->n; i++) if (!include || include[ord[i]]) draw_item(s, ord[i], &s->items[ord[i]], c, 0, pen, rgb, zb, ids);
-    for (int i = 0; i < s->n; i++) if (s->items[ord[i]].shadow && (!include || include[ord[i]])) draw_item(s, ord[i], &s->items[ord[i]], c, 1, pen, rgb, zb, NULL);
+    for (int i = 0; i < s->n; i++) if (s->items[ord[i]].kind != NB1_SURROUND && (!include || include[ord[i]])) draw_item(s, ord[i], &s->items[ord[i]], c, 0, pen, rgb, zb, ids);
+    for (int i = 0; i < s->n; i++) if (s->items[ord[i]].kind != NB1_SURROUND && s->items[ord[i]].shadow && (!include || include[ord[i]])) draw_item(s, ord[i], &s->items[ord[i]], c, 1, pen, rgb, zb, NULL);
     free(ord); free(pen); free(zb);
 }
 void nb1_render_cam(const Nb1Scene *s, const Nb1Cam *c, uint8_t *rgb) { render_cam(s, c, rgb, NULL, NULL); }
@@ -341,7 +341,7 @@ void nb1_visible_map(const Nb1Scene *s, int32_t *ids) {
 int nb1_aim(const Nb1Scene *s, const double O[3], const double D[3], double fallback_z, Nb1Aim *out) {
     int best = -1; double bt = 0, P[3];
     for (int i = 0; i < s->n; i++) {
-        const Nb1Item *it = &s->items[i]; if (it->kind == NB1_MASK || it->decal || (s->aim_skip_hud && it->hud)) continue;
+        const Nb1Item *it = &s->items[i]; if (it->kind == NB1_MASK || it->kind == NB1_SURROUND || it->decal || (s->aim_skip_hud && it->hud)) continue;
         double t; int tx, ty;
         if (!hit_ray(it, s->far, O, D, &t, &tx, &ty)) continue;
         if (it->tex[((size_t)ty * it->w + tx) * 4 + 3] == 0) continue;

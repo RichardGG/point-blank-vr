@@ -140,7 +140,7 @@ Nb1Table *nb1_table_load(const char *path) {
             if ((v = json_get(rj, "tilt_y"))) r->tilt_y = v->num;
         }
     }
-    json_free(j); return t;
+    t->root = j; return t;
 }
 
 Nb1Table *nb1_table_with_scales(const Nb1Table *base, const Nb1ScaleSpec *specs, int n) {
@@ -158,7 +158,7 @@ Nb1Table *nb1_table_with_scales(const Nb1Table *base, const Nb1ScaleSpec *specs,
 void nb1_table_free(Nb1Table *t) {
     if (!t) return;
     if (t->shallow) { free(t->scales); free(t); return; }
-    free(t->scales);
+    json_free(t->root); free(t->scales);
     for (int i = 0; i < t->nedits; i++) {
         for (int k = 0; k < t->edits[i].nparts; k++) { Part *p = &t->edits[i].parts[k]; for (int r = 0; r < p->nrings; r++) free(p->ring_xy[r]); free(p->ring_xy); free(p->ring_n); }
         free(t->edits[i].parts);
@@ -185,8 +185,22 @@ int nb1_match_item(const Match *m, const Nb1Item *it) {
 
 /* ---------------------------------------------------------------- automatic selection */
 typedef struct { char name[64]; Nb1Table *table; int ncodes_all, ncodes_any, nart; int *codes_all, *codes_any, *art; double min_sim; } SetRule;
-typedef struct { int id; int n; uint32_t *keys; } Ref;          /* keys: layer << 16 | tile code, sorted */
-struct Nb1TableSet { int nrules; SetRule *rules; int nrefs; Ref *refs; };
+#define THUMB_ROWS 11
+#define THUMB_COLS 16
+#define THUMB_MAX_MAE 50
+typedef struct { int id; int n; uint32_t *keys; int has_thumb; int16_t thumb[THUMB_ROWS * THUMB_COLS * 3]; } Ref;          /* keys: layer << 20 | tile code, sorted */
+struct Nb1TableSet { int nrules; SetRule *rules; int nrefs; Ref *refs; const Nb1Roms *roms; };
+void nb1_tableset_set_roms(Nb1TableSet *ts, const Nb1Roms *roms) { if (ts) ts->roms = roms; }
+/* 16 x 11 block averages of the arcade composite above the HUD band: the same definition as depthscene.thumb() */
+static void live_thumb(const Nb1State *st, const Nb1State *sst, const Nb1Roms *roms, int16_t *out) {
+    uint8_t *img = malloc(NB1_W * NB1_H * 3); nb1_render_composite(st, sst, roms, img);
+    for (int r = 0; r < THUMB_ROWS; r++) for (int c = 0; c < THUMB_COLS; c++) for (int ch = 0; ch < 3; ch++) {
+        long sum = 0; for (int y = 0; y < 16; y++) for (int x = 0; x < 18; x++) sum += img[((r * 16 + y) * NB1_W + c * 18 + x) * 3 + ch];
+        out[(r * THUMB_COLS + c) * 3 + ch] = (int16_t)(sum / (16 * 18));
+    }
+    free(img);
+}
+static int thumb_close(const int16_t *a, const int16_t *b) { long s = 0; for (int i = 0; i < THUMB_ROWS * THUMB_COLS * 3; i++) s += labs((long)a[i] - b[i]); return s <= (long)THUMB_MAX_MAE * THUMB_ROWS * THUMB_COLS * 3; }
 
 static int cmp_u32(const void *a, const void *b) { uint32_t x = *(const uint32_t *)a, y = *(const uint32_t *)b; return x < y ? -1 : x > y; }
 static int *int_array(const Json *j, int *n) {
@@ -219,9 +233,9 @@ Nb1TableSet *nb1_tableset_load(const char *path) {
             ts->nrefs = rj->n; ts->refs = calloc(rj->n ? rj->n : 1, sizeof(Ref));
             for (int i = 0; i < rj->n; i++) {
                 Ref *r = &ts->refs[i]; r->id = atoi(rj->key[i]); const Json *per = rj->kid[i]; int cap = 0;
-                for (int k = 0; k < per->n; k++) cap += per->kid[k]->n;
+                for (int k = 0; k < per->n; k++) if (strcmp(per->key[k], "thumb")) cap += per->kid[k]->n;
                 r->keys = malloc((cap ? cap : 1) * sizeof(uint32_t));
-                for (int k = 0; k < per->n; k++) { uint32_t L = (uint32_t)atoi(per->key[k]); for (int c = 0; c < per->kid[k]->n; c++) r->keys[r->n++] = L << 16 | (uint32_t)per->kid[k]->kid[c]->num; }
+                for (int k = 0; k < per->n; k++) { if (!strcmp(per->key[k], "thumb")) { if (per->kid[k]->n == THUMB_ROWS * THUMB_COLS * 3) { r->has_thumb = 1; for (int q = 0; q < per->kid[k]->n; q++) r->thumb[q] = (int16_t)per->kid[k]->kid[q]->num; } continue; } uint32_t L = (uint32_t)atoi(per->key[k]); for (int c = 0; c < per->kid[k]->n; c++) r->keys[r->n++] = L << 20 | (uint32_t)per->kid[k]->kid[c]->num; }
                 qsort(r->keys, r->n, sizeof(uint32_t), cmp_u32);
             }
         }
@@ -237,16 +251,27 @@ void nb1_tableset_free(Nb1TableSet *ts) {
     free(ts->rules); free(ts->refs); free(ts);
 }
 
-/* the (layer, tile code) pairs of the enabled scrolling layers, sorted and unique */
-static uint32_t *art_keys(const Nb1State *st, int *n_out) {
+/* the (layer, tile code) pairs of the enabled scrolling layers, plus the first tile code of every big sprite entry as layer 9 (the tilemaps keep leftovers
+ * of earlier scenes behind big sprites, so they alone can mislead); sorted and unique */
+#define BIG_SPRITE_AREA 9000
+static uint32_t *art_keys(const Nb1State *st, const Nb1State *sst, int *n_out) {
     static const int off[4] = { 0x0000, 0x1000, 0x2000, 0x3000 };
-    uint32_t *k = malloc(4 * 4096 * sizeof *k); int n = 0;
+    uint32_t *k = malloc((4 * 4096 + 300) * sizeof *k); int n = 0;
     for (int L = 0; L < 4; L++) {
         if (st->ctl[0x10 + L] & 8) continue;
-        int start = n; for (int i = 0; i < 4096; i++) k[n++] = (uint32_t)L << 16 | st->vram[off[L] + i];
+        int start = n; for (int i = 0; i < 4096; i++) k[n++] = (uint32_t)L << 20 | st->vram[off[L] + i];
         qsort(k + start, 4096, sizeof(uint32_t), cmp_u32);
         int w = start; for (int i = start; i < n; i++) if (i == start || k[i] != k[i - 1]) k[w++] = k[i];
         n = w;
+    }
+    if (sst) {
+        Nb1Entry *ents = malloc(256 * sizeof *ents); int ne = nb1_sprite_entries(sst, ents), start = n;
+        for (int e = 0; e < ne; e++) if (ents[e].ntiles && ents[e].hsize * ents[e].vsize >= BIG_SPRITE_AREA) {
+            int t = ents[e].tiles[0].t; k[n++] = 9u << 20 | (uint32_t)(((t & 0x7ff) | (sst->bank[(t >> 11) & 7] << 11)) + ents[e].offset);
+        }
+        qsort(k + start, (size_t)(n - start), sizeof(uint32_t), cmp_u32);
+        int w = start; for (int i = start; i < n; i++) if (i == start || k[i] != k[i - 1]) k[w++] = k[i];
+        n = w; free(ents);
     }
     *n_out = n; return k;
 }
@@ -260,15 +285,22 @@ const Nb1Table *nb1_tableset_select(const Nb1TableSet *ts, const Nb1State *st, c
     if (name) *name = NULL;
     if (!ts) return NULL;
     if (!sst) sst = st;
-    uint32_t *keys = NULL; int nkeys = 0; int *codes = NULL; int ncodes = 0; int have_codes = 0;
+    uint32_t *keys = NULL; int nkeys = 0; int *codes = NULL; int ncodes = 0; int have_codes = 0; int16_t thumb[THUMB_ROWS * THUMB_COLS * 3]; int have_thumb = 0;
     const SetRule *best = NULL; double best_sim = -1;
     for (int i = 0; i < ts->nrules; i++) {
         const SetRule *r = &ts->rules[i]; if (!r->table) continue;
         if (r->nart) {
-            if (!keys) keys = art_keys(st, &nkeys);
+            if (!keys) keys = art_keys(st, sst, &nkeys);
             double sim = 0;
             for (int a = 0; a < r->nart; a++) for (int q = 0; q < ts->nrefs; q++)
-                if (ts->refs[q].id == r->art[a]) { double s = jaccard(keys, nkeys, ts->refs[q].keys, ts->refs[q].n); if (s > sim) sim = s; }
+                if (ts->refs[q].id == r->art[a]) {
+                    double s = jaccard(keys, nkeys, ts->refs[q].keys, ts->refs[q].n);
+                    if (s >= r->min_sim && ts->roms && ts->refs[q].has_thumb) {              /* same tile codes, different picture? (leftovers of earlier scenes stay in the tilemaps) */
+                        if (!have_thumb) { live_thumb(st, sst, ts->roms, thumb); have_thumb = 1; }
+                        if (!thumb_close(thumb, ts->refs[q].thumb)) continue;
+                    }
+                    if (s > sim) sim = s;
+                }
             if (sim >= r->min_sim && (!best || sim > best_sim + 1e-12)) { best = r; best_sim = sim; }
         } else {
             if (!have_codes) {
@@ -291,7 +323,7 @@ const Nb1Table *nb1_tableset_select(const Nb1TableSet *ts, const Nb1State *st, c
 int nb1_tableset_nearest_scene(const Nb1TableSet *ts, const Nb1State *st, double *similarity) {
     if (similarity) *similarity = 0;
     if (!ts || !ts->nrefs) return -1;
-    int nkeys = 0; uint32_t *keys = art_keys(st, &nkeys); int best = -1; double bs = -1;
+    int nkeys = 0; uint32_t *keys = art_keys(st, st, &nkeys); int best = -1; double bs = -1;
     for (int q = 0; q < ts->nrefs; q++) { double s = jaccard(keys, nkeys, ts->refs[q].keys, ts->refs[q].n); if (s > bs) { bs = s; best = ts->refs[q].id; } }
     free(keys); if (similarity) *similarity = bs; return best;
 }
@@ -299,17 +331,17 @@ int nb1_tableset_nearest_scene(const Nb1TableSet *ts, const Nb1State *st, double
 struct Nb1Selector { const Nb1TableSet *ts; int agree; const Nb1Table *cur; const char *cur_name; uint32_t *anchor; int nanchor; const Nb1Table *cand; const char *cand_name; int cand_n; };
 Nb1Selector *nb1_selector_new(const Nb1TableSet *ts, int agree) { Nb1Selector *s = calloc(1, sizeof *s); s->ts = ts; s->agree = agree < 1 ? 1 : agree; return s; }
 void nb1_selector_free(Nb1Selector *s) { if (s) { free(s->anchor); free(s); } }
-static void sel_anchor(Nb1Selector *s, const Nb1State *st) { free(s->anchor); s->anchor = art_keys(st, &s->nanchor); }
+static void sel_anchor(Nb1Selector *s, const Nb1State *st, const Nb1State *sst) { free(s->anchor); s->anchor = art_keys(st, sst, &s->nanchor); }
 const Nb1Table *nb1_selector_update(Nb1Selector *s, const Nb1State *st, const Nb1State *sst, const char **name) {
     const char *rn = NULL; const Nb1Table *raw = nb1_tableset_select(s->ts, st, sst, &rn);
-    if (raw == s->cur) { if (raw) sel_anchor(s, st); s->cand = NULL; s->cand_n = 0; }
+    if (raw == s->cur) { if (raw) sel_anchor(s, st, sst); s->cand = NULL; s->cand_n = 0; }
     else {
         int same_scene = 0;
-        if (!raw && s->cur) { int n = 0; uint32_t *k = art_keys(st, &n); same_scene = jaccard(k, n, s->anchor, s->nanchor) >= 0.6; free(k); }
+        if (!raw && s->cur) { int n = 0; uint32_t *k = art_keys(st, sst, &n); same_scene = jaccard(k, n, s->anchor, s->nanchor) >= 0.6; free(k); }
         if (same_scene) { s->cand = NULL; s->cand_n = 0; }                    /* the same background: a rule just stopped matching for a moment */
         else {
             if (raw == s->cand && s->cand_n) s->cand_n++; else { s->cand = raw; s->cand_name = rn; s->cand_n = 1; }
-            if (s->cand_n >= s->agree) { s->cur = s->cand; s->cur_name = s->cand_name; s->cand = NULL; s->cand_n = 0; if (s->cur) sel_anchor(s, st); }
+            if (s->cand_n >= s->agree) { s->cur = s->cand; s->cur_name = s->cand_name; s->cand = NULL; s->cand_n = 0; if (s->cur) sel_anchor(s, st, sst); }
         }
     }
     if (name) *name = s->cur ? s->cur_name : NULL;
