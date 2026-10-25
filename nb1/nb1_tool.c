@@ -7,6 +7,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#ifdef _WIN32
+#include <direct.h>
+#define mkdir(p, m) _mkdir(p)
+#endif
 
 static FILE *fopenf(const char *dir, const char *name, const char *mode) {
     char p[1024]; snprintf(p, sizeof p, "%s/%s", dir, name); FILE *f = fopen(p, mode);
