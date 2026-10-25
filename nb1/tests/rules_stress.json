@@ -1,0 +1,15 @@
+{"_note": "Synthetic table that exercises every rule key the C port supports (not a real scene).",
+ "defaults": {"far": 30.0, "z_front": 3.0, "z_back": 12.0, "hud_z": 2.0, "slot_gap": 0.001},
+ "rules": [
+  {"match": {"kind": "tilemap", "layer": [4, 5]}, "hud": true},
+  {"match": {"kind": "sprite", "pri": [6, 7]}, "hud": true},
+  {"match": {"kind": "tilemap", "layer": [0]}, "plane": {"y": -1.2}},
+  {"match": {"kind": "tilemap", "layer": [1]}, "plane": {"x": -1.7}},
+  {"match": {"kind": "tilemap", "layer": [2]}, "plane": {"y": 0.9}},
+  {"match": {"kind": "sprite", "pri": [0, 1], "center_x": [0, 144]}, "floor_contact": -1.1, "tilt_y": 12.5},
+  {"match": {"kind": "sprite", "pri": [2], "center_y": [0, 112]}, "ceiling_contact": 0.8, "tilt_x": -8},
+  {"match": {"kind": "sprite", "size": [4, 4]}, "zoom_depth": 3.0, "zoom_clamp": [2.0, 25.0]},
+  {"match": {"kind": "sprite", "code": [0, 20000], "pal": [0, 1, 2, 3]}, "z": 6.5, "tilt_y": -20},
+  {"match": {"kind": "tilemap", "part": null}, "z": 40.0},
+  {"match": {"kind": "sprite", "id": [1, 2, 3, 4, 5, 6, 7, 8]}, "zoom_depth": 2.0}
+ ]}
