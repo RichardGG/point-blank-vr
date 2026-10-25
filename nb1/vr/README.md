@@ -24,7 +24,7 @@ Pause the game (left stick click, or `P` on the mirror window), and the buttons 
 | trigger | select the layer (or sprite type) the laser points at; it is outlined in yellow |
 | grip | switch the scope: whole layer (a tilemap layer, or every sprite of that priority) / this sprite type only (every sprite with the same tile code) |
 | left stick up / down | scale the selected group: push it away / pull it closer along the arcade eye's rays, so the arcade picture never changes, only its real size and distance |
-| right stick up / down | viewport size (bigger window = layers closer, sizes unchanged) |
+| right stick up / down | adjust the current target: viewport size (bigger window = layers closer, sizes unchanged), screen tilt, floor height, ceiling height, or how far the HUD sits below the picture. Right stick click while paused cycles the target (the panel under the picture marks it with `>`) |
 | A (right) | jump to the selected layer at real size (`--jump-dist`, 1 m away) and back to the playing area |
 | B (right) | save the edits |
 | X (left) / Y (left) | reset the selected group / every edit of this scene |
@@ -32,6 +32,8 @@ Pause the game (left stick click, or `P` on the mirror window), and the buttons 
 The controls are also listed on a panel to your left (turn your head left) and this scene's edits on a panel to your right.
 
 Keyboard stand-ins on the mirror window: Enter select, G scope, Up/Down scale, PageUp/PageDown viewport, J jump, S save, X, Y.
+
+**Tilt, floor and HUD.** The picture's horizon row (`horizon_y` in a table's `surround`, or an explicit `pitch`) tilts the play window up in the room by that angle, so the surround's floor meets the ground where the picture's ground is; the street and garden floors are placed from a base row of a layer (`ground.base_row` / `base_layer`). The HUD (hearts, timer, bullets) is moved down below the picture (`--hud-below N` arcade pixels, default 72; `--hud-overlay` keeps it on the picture) and white corner marks show the play window (`--no-brackets` hides them). The tilt, floor and ceiling edits are saved with the scale edits (`"world"` in the save) and `merge_scales.py` writes the changed ones into the table's `surround`. The values for each family are estimates to be tuned in the headset.
 
 Edits are kept per scene (the captured scene whose background art is nearest) and applied by the library as a table's `"scales": [{"match": {...}, "scale": k}]` (depth and plane distance times k, non-HUD items only; all matching entries multiply). Saving appends one line to `pbvr_layer_edits.jsonl` (`--edits-out`): the scene (table name, nearest scene number and similarity, game frame), the viewport settings, and for every edit the layer, its match, the scale, and the depth before and after in authored and real metres, plus a ready-to-paste `table_snippet`. `tools/merge_scales.py pbvr_layer_edits.jsonl --scene N --table T.json` writes the last save of scene N into the table (`--list` shows what was saved).
 

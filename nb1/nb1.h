@@ -20,7 +20,7 @@ typedef struct {
     uint8_t pal[0x8000];
 } Nb1State;
 Nb1State *nb1_state_load(const char *path);
-Nb1State *nb1_state_load_z(const char *path);                 /* the same, zlib-compressed (data/scenes/*.z) */
+Nb1State *nb1_state_load_z(const char *path);                 /* the same, zlib-compressed (data/scenes) */
 Nb1State *nb1_state_from_bytes(const uint8_t *b, size_t len);   /* same layout, 229,464 bytes; NULL if too short */
 #define NB1_STATE_FILE_BYTES 229464
 
@@ -91,11 +91,13 @@ typedef struct {
     /* derived by nb1_scene_prepare */
     double ctr[3], r[3], u[3], nrm[3], rr, uu;
     /* NB1_SURROUND items (see nb1_scene_add_surround): free polygons textured with `tex` (w x h RGBA), never part of the arcade picture, aim or visible map */
-    Nb1Poly *polys; int npolys; int wrap /* 0 clamp, 1 repeat, 2 mirrored repeat */; int fade_on; double fade_c[3], fade_r0, fade_r1, fade_col[3];
+    Nb1Poly *polys; int npolys; int wrap /* horizontal: 0 clamp, 1 repeat, 2 mirrored repeat */, wrap_t /* the same, vertical */; int fade_on; double fade_c[3], fade_r0, fade_r1, fade_col[3];
 } Nb1Item;
 typedef struct { Nb1Item *items; int n; double far; uint8_t rgb[0x2000][3];
                  int aim_skip_hud; /* 1 = aiming ignores HUD items (the ray passes through them); 0 by default; set by the viewers */
                  int scroll_hint[4]; /* input to nb1_scene_add_surround: 1 = this tilemap layer is scrolling (the caller saw its scroll registers change) */
+                 /* surround adjustments (input; adj_has: pitch, ground, ceiling) and the values actually used (output; NAN = none) */
+                 int adj_has[3]; double adj_pitch, adj_ground, adj_ceil, pitch_deg, ground_y, ceil_y;
                  double clear[3]; int has_clear; /* background colour of the world around the play screen (set by nb1_scene_add_surround), 0..255 */ } Nb1Scene;
 
 int  nb1_build_scene(const Nb1State *st, const Nb1State *sst, const Nb1Roms *roms, const Nb1Table *tab, Nb1Scene *out);

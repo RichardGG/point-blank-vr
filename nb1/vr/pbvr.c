@@ -102,7 +102,10 @@ static M4 m4_rigid_inverse(M4 a) {
 }
 static M4 m4_yaw_pos(double yaw, const double p[3]) { M4 r = m4_id(); double c = cos(yaw), s = sin(yaw); r.m[0] = c; r.m[2] = -s; r.m[8] = s; r.m[10] = c; r.m[12] = p[0]; r.m[13] = p[1]; r.m[14] = p[2]; return r; }
 static M4 m4_trans(double x, double y, double z) { M4 r = m4_id(); r.m[12] = x; r.m[13] = y; r.m[14] = z; return r; }
+static M4 m4_rotx(double a) { M4 r = m4_id(); double c = cos(a), s = sin(a); r.m[5] = c; r.m[6] = s; r.m[9] = -s; r.m[10] = c; return r; }
 static M4 m4_scale_z(double zs) { M4 r = m4_id(); r.m[10] = zs; return r; }
+static M4 m4_model(double zs, double pitch) { return m4_mul(m4_rotx(-pitch), m4_scale_z(zs)); }               /* arcade-camera frame -> world: depth scale, then tilt back by the camera's pitch */
+static M4 m4_model_inv(double zs, double pitch) { return m4_mul(m4_scale_z(1.0 / zs), m4_rotx(pitch)); }
 static M4 m4_proj(XrFovf f, double n, double fa) {
     double l = tan(f.angleLeft), r = tan(f.angleRight), u = tan(f.angleUp), d = tan(f.angleDown); M4 p; memset(&p, 0, sizeof p);
     p.m[0] = 2 / (r - l); p.m[5] = 2 / (u - d); p.m[8] = (r + l) / (r - l); p.m[9] = (u + d) / (u - d);
@@ -112,12 +115,13 @@ static void m4_point(M4 a, const double v[3], double out[3]) { for (int i = 0; i
 static void m4_dir(M4 a, const double v[3], double out[3]) { for (int i = 0; i < 3; i++) out[i] = a.m[i] * v[0] + a.m[4 + i] * v[1] + a.m[8 + i] * v[2]; }
 
 typedef struct { int scene; Nb1ScaleSpec s; } OvEntry;           /* scene = nearest captured scene id, -1 when unknown */
+typedef struct { int scene, has[3]; double pitch, ground, ceil; } SurAdj;                   /* per-scene adjustments of the world: tilt, floor, ceiling */
 typedef struct { int kind, id, pri, has_key, key; } SelItem;     /* what the pointer picked, kept so the scope can be switched */
 
 /* ------------------------------------------------------------------ options */
 typedef struct {
     char roms[512], ipc[512], table[512], tables[512];
-    double vscale, sdiag, sdist, gun_pitch, aim_yaw, aim_pitch, jump_dist; int no_vr, gaze, no_surround, scene_start, live; char edits_out[512], scenes[512];
+    double vscale, sdiag, sdist, gun_pitch, aim_yaw, aim_pitch, jump_dist; int no_vr, gaze, no_surround, scene_start, live, no_brackets, hud_flat; double hud_below; char edits_out[512], scenes[512];
 } Opts;
 
 /* ------------------------------------------------------------------ scene worker: reads states and builds scenes off the render thread */
@@ -125,7 +129,7 @@ typedef struct {
     Opts *o; Nb1Roms *roms; Nb1TableSet *tset; Nb1Table *tab, *deftab;
     SDL_mutex *mu; GlScene back; int ready; unsigned back_frame; const char *back_table; int back_scene; double back_sim;
     volatile int quit, paused, rebuild; volatile double zs; Source src;
-    OvEntry *ov; int nov, capov;                       /* the editor's edits, guarded by mu */
+    OvEntry *ov; int nov, capov; SurAdj *adj; int nadj, capadj; volatile double hud_dy;                       /* the editor's edits, guarded by mu */
     int prev_scroll[4][2], moving[4]; SceneEnt *scenes; int nscenes, live; const char *scenes_dir; volatile int goto_idx; Nb1Selector *selr; const Nb1Table *last_use; Nb1State *last; unsigned last_frame; const char *last_name; int last_scene; double last_sim;   /* the state the current scene came from, so an edit can rebuild it */
 } Worker;
 
@@ -162,6 +166,8 @@ static int worker_main(void *arg) {
         for (int i = 0; i < w->nov && ns < 64; i++) if (w->ov[i].scene == w->last_scene && w->ov[i].s.k != 1.0) specs[ns++] = w->ov[i].s;
         SDL_UnlockMutex(w->mu);
         Nb1Table *scaled = ns ? nb1_table_with_scales(use, specs, ns) : NULL;
+        w->back.adj_has[0] = w->back.adj_has[1] = w->back.adj_has[2] = 0; w->back.hud_dy = w->hud_dy;
+        SDL_LockMutex(w->mu); for (int i = 0; i < w->nadj; i++) if (w->adj[i].scene == w->last_scene) { for (int k = 0; k < 3; k++) w->back.adj_has[k] = w->adj[i].has[k]; w->back.adj_pitch = w->adj[i].pitch; w->back.adj_ground = w->adj[i].ground; w->back.adj_ceil = w->adj[i].ceil; } SDL_UnlockMutex(w->mu);
         w->back.zs = w->zs; w->back.no_rulers = 1; w->back.surround = !w->o->no_surround;
         gl_scene_cpu(&w->back, w->last, w->roms, scaled ? scaled : use); w->back.scene.aim_skip_hud = 1;
         nb1_table_free(scaled);
@@ -342,7 +348,9 @@ static int save_edits(const char *path, const Worker *W, const GlScene *g, int s
     fprintf(f, "], \"table_snippet\": {\"scales\": [");
     int m = 0;
     for (int i = 0; i < W->nov; i++) { const OvEntry *e = &W->ov[i]; if (e->scene != scene) continue; spec_json(&e->s, sj, sizeof sj); fprintf(f, "%s{\"match\": %s, \"scale\": %.4f}", m++ ? ", " : "", sj, e->s.k); }
-    fprintf(f, "]}}\n"); fclose(f); return n;
+    fprintf(f, "]}, \"world\": {\"pitch_deg\": %.2f, \"ground_y_m\": %s, \"ceiling_y_m\": %s, \"hud_below_px\": %.0f, \"pitch_adjusted\": %d, \"ground_adjusted\": %d, \"ceiling_adjusted\": %d}", g->scene.pitch_deg,
+            isnan(g->scene.ground_y) ? "null" : (snprintf(sj, sizeof sj, "%.3f", g->scene.ground_y), sj), isnan(g->scene.ceil_y) ? "null" : (snprintf(sd, sizeof sd, "%.3f", g->scene.ceil_y), sd), o->hud_flat ? 0.0 : o->hud_below, g->scene.adj_has[0], g->scene.adj_has[1], g->scene.adj_has[2]);
+    fprintf(f, "}\n"); fclose(f); return n;
 }
 
 static double now_s(void) { return (double)SDL_GetPerformanceCounter() / (double)SDL_GetPerformanceFrequency(); }
@@ -356,11 +364,12 @@ static LONG WINAPI crash_filter(EXCEPTION_POINTERS *e) {            /* a silent 
     fflush(stderr); return EXCEPTION_EXECUTE_HANDLER;
 }
 #endif
+static char adjf[32], adjc[32];
 int main(int argc, char **argv) {
 #ifdef _WIN32
     SetUnhandledExceptionFilter(crash_filter); setvbuf(stderr, NULL, _IONBF, 0);
 #endif
-    Opts o; memset(&o, 0, sizeof o); o.vscale = 1; o.sdiag = 29; o.sdist = 0.9; o.jump_dist = 1.0; snprintf(o.edits_out, sizeof o.edits_out, "pbvr_layer_edits.jsonl");
+    Opts o; memset(&o, 0, sizeof o); o.vscale = 1; o.sdiag = 29; o.sdist = 0.9; o.jump_dist = 1.0; o.hud_below = 72; snprintf(o.edits_out, sizeof o.edits_out, "pbvr_layer_edits.jsonl");
     for (int i = 1; i < argc; i++) {
         const char *a = argv[i], *v = i + 1 < argc ? argv[i + 1] : NULL;
         if (!strcmp(a, "--roms") && v) { snprintf(o.roms, sizeof o.roms, "%s", v); i++; }
@@ -373,6 +382,9 @@ int main(int argc, char **argv) {
         else if (!strcmp(a, "--gun-pitch") && v) { o.gun_pitch = atof(v); i++; }
         else if (!strcmp(a, "--no-vr")) o.no_vr = 1;
         else if (!strcmp(a, "--no-surround")) o.no_surround = 1;
+        else if (!strcmp(a, "--no-brackets")) o.no_brackets = 1;                                              /* no white corner marks round the play window */
+        else if (!strcmp(a, "--hud-overlay")) o.hud_flat = 1;                                                  /* keep the HUD on the picture (default: moved below it) */
+        else if (!strcmp(a, "--hud-below") && v) { o.hud_below = atof(v); i++; }                                /* arcade pixels the HUD is moved down (default 72) */
         else if (!strcmp(a, "--scenes") && v) { snprintf(o.scenes, sizeof o.scenes, "%s", v); i++; }             /* the frozen scene snapshots (research/data/scenes) */
         else if (!strcmp(a, "--scene") && v) { o.scene_start = atoi(v); i++; }
         else if (!strcmp(a, "--live")) o.live = 1;                                                              /* with --scenes: jump MAME to each scene's save state instead of showing the frozen snapshot */
@@ -441,6 +453,7 @@ int main(int argc, char **argv) {
     int has_sel = 0, scope = 0, cur_scene = -1; double cur_sim = 0; Nb1ScaleSpec sel; SelItem sel_item; memset(&sel, 0, sizeof sel); memset(&sel_item, 0, sizeof sel_item);
     double jump = 0, last_t = now_s(); int prev_sq[2] = { 0, 0 }, prev_ba = 0, prev_bb = 0, prev_bx = 0, prev_by = 0, prev_seltrig = 0;
     int inj_sel = 0, inj_sq = 0, inj_a = 0, inj_b = 0, inj_x = 0, inj_y = 0, kb_ls = 0, kb_rs = 0, af = 0, shot_req = 0, shot_n = 0; const int autotest = getenv("PBVR_AUTOTEST") != NULL || getenv("PBVR_TOUR") != NULL, tour = getenv("PBVR_TOUR") != NULL;   /* keyboard / scripted stand-ins for the controller buttons */
+    int need_msg_adj = 0, adj_target = 0; static const char *ADJ_NAME[5] = { "viewport size", "screen tilt", "floor height", "ceiling height", "HUD below the picture" };
     int nav = 0, prev_flick = 0; float stick_x[2] = { 0, 0 };
     int in_a[2] = { 0, 0 }, in_b[2] = { 0, 0 }, in_sq[2] = { 0, 0 }; float stick[2] = { 0, 0 }; char msg[160] = ""; double msg_until = 0;
 
@@ -460,6 +473,8 @@ int main(int argc, char **argv) {
             } else if (ev.type == SDL_KEYUP) { if (ev.key.keysym.sym == SDLK_c) kcoin = 0; if (ev.key.keysym.sym == SDLK_v) kstart = 0; if (ev.key.keysym.sym == SDLK_UP || ev.key.keysym.sym == SDLK_DOWN) kb_ls = 0; if (ev.key.keysym.sym == SDLK_PAGEUP || ev.key.keysym.sym == SDLK_PAGEDOWN) kb_rs = 0; }
         }
         vw_m = o.sdiag * 0.0254 * 0.8 * o.vscale; zs = (NB1_W * o.sdist / vw_m) / NB1_FOCAL; W.zs = zs; W.paused = paused;
+        { double hd = o.hud_flat ? 0 : o.hud_below; if (hd != W.hud_dy) { W.hud_dy = hd; W.rebuild = 1; } }
+        double pitch_r = front.loaded ? front.scene.pitch_deg * M_PI / 180 : 0;                  /* the scene's own tilt: the picture's horizon made level */
 
         /* take a finished scene from the worker */
         SDL_LockMutex(W.mu);
@@ -494,7 +509,7 @@ int main(int argc, char **argv) {
             if (trg[active_hand] == 0 && trg[1 - active_hand]) active_hand = 1 - active_hand;
             { XrActionStateGetInfo gi = { XR_TYPE_ACTION_STATE_GET_INFO }; XrActionStateBoolean b = { XR_TYPE_ACTION_STATE_BOOLEAN };
               gi.action = xr.a_pause; xrGetActionStateBoolean(xr.sess, &gi, &b); int p = b.isActive && b.currentState; if (p && !prev_pause) paused = !paused; prev_pause = p;
-              gi.action = xr.a_recenter; b = (XrActionStateBoolean){ XR_TYPE_ACTION_STATE_BOOLEAN }; xrGetActionStateBoolean(xr.sess, &gi, &b); p = b.isActive && b.currentState; if (p && !prev_rec) need_recenter = 1; prev_rec = p; }
+              gi.action = xr.a_recenter; b = (XrActionStateBoolean){ XR_TYPE_ACTION_STATE_BOOLEAN }; xrGetActionStateBoolean(xr.sess, &gi, &b); p = b.isActive && b.currentState; if (p && !prev_rec) { if (paused) { adj_target = (adj_target + 1) % 5; need_msg_adj = 1; } else need_recenter = 1; } prev_rec = p; }
             if (!paused && trg[active_hand] && !trig) {                                                 /* a short buzz on each shot */
                 XrHapticActionInfo hi = { XR_TYPE_HAPTIC_ACTION_INFO }; hi.action = xr.a_haptic; hi.subactionPath = xr.hand[active_hand];
                 XrHapticVibration vb = { XR_TYPE_HAPTIC_VIBRATION }; vb.duration = 25000000; vb.frequency = XR_FREQUENCY_UNSPECIFIED; vb.amplitude = 0.8f; xrApplyHapticFeedback(xr.sess, &hi, (XrHapticBaseHeader *)&vb);
@@ -521,11 +536,11 @@ int main(int argc, char **argv) {
                 if (o.gun_pitch != 0 || o.aim_pitch != 0) { double a = (o.gun_pitch + o.aim_pitch) * deg, cs = cos(a), sn = sin(a); M4 rp = m4_id(); rp.m[5] = cs; rp.m[6] = sn; rp.m[9] = -sn; rp.m[10] = cs; c = m4_mul(c, rp); }
                 if (o.aim_yaw != 0) { double a = o.aim_yaw * deg, cs = cos(a), sn = sin(a); M4 ry = m4_id(); ry.m[0] = cs; ry.m[2] = -sn; ry.m[8] = sn; ry.m[10] = cs; c = m4_mul(c, ry); }
                 double o_phys[3] = { c.m[12], c.m[13], c.m[14] }, d_phys[3] = { -c.m[8], -c.m[9], -c.m[10] };
-                M4 to_scene = m4_mul(m4_scale_z(1.0 / zs), m4_mul(m4_trans(0, 0, -jump), m4_rigid_inverse(m4_yaw_pos(yaw0, origin))));
+                M4 to_scene = m4_mul(m4_model_inv(zs, pitch_r), m4_mul(m4_trans(0, 0, -jump), m4_rigid_inverse(m4_yaw_pos(yaw0, origin))));
                 m4_point(to_scene, o_phys, ray_o); m4_dir(to_scene, d_phys, ray_d); have_ray = 1; memcpy(ctl_pos, o_phys, sizeof ctl_pos);
             }
             if (have_views) for (int e = 0; e < 2; e++) {
-                M4 scene_to_phys = m4_mul(m4_yaw_pos(yaw0, origin), m4_mul(m4_trans(0, 0, jump), m4_scale_z(zs)));
+                M4 scene_to_phys = m4_mul(m4_yaw_pos(yaw0, origin), m4_mul(m4_trans(0, 0, jump), m4_model(zs, pitch_r)));
                 view[e] = m4_mul(m4_rigid_inverse(m4_from_pose(xr.views[e].pose)), scene_to_phys); proj[e] = m4_proj(xr.views[e].fov, 0.05, 600.0);
             }
         }
@@ -535,7 +550,7 @@ int main(int argc, char **argv) {
         if (have_ray && front.loaded) {
             Nb1AimSnap r;
             if (nb1_aim_snap(&front.scene, front.ids, ray_o, ray_d, 24.0, &r)) {
-                dbg_rx = r.raw_sx; dbg_ry = r.raw_sy; sx = r.a.sx; sy = r.a.sy; hit_item = r.a.item; M4 scene_to_phys = m4_mul(m4_yaw_pos(yaw0, origin), m4_mul(m4_trans(0, 0, jump), m4_scale_z(zs))); m4_point(scene_to_phys, r.a.hit, hit_phys); have_hit = 1;
+                dbg_rx = r.raw_sx; dbg_ry = r.raw_sy; sx = r.a.sx; sy = r.a.sy; hit_item = r.a.item; M4 scene_to_phys = m4_mul(m4_yaw_pos(yaw0, origin), m4_mul(m4_trans(0, 0, jump), m4_model(zs, pitch_r))); m4_point(scene_to_phys, r.a.hit, hit_phys); have_hit = 1;
             }
         }
         double t = now_s(), dt = t - last_t; if (dt > 0.1) dt = 0.1; last_t = t;
@@ -589,7 +604,20 @@ int main(int argc, char **argv) {
                 e->s.k *= exp(dt * ls * 0.6); if (e->s.k < 0.1) e->s.k = 0.1; if (e->s.k > 6) e->s.k = 6;
                 SDL_UnlockMutex(W.mu); changed = 1;
             }
-            if (fabs(rs) > 0.15) { o.vscale *= exp(dt * rs * 0.7); if (o.vscale < 0.2) o.vscale = 0.2; if (o.vscale > 6) o.vscale = 6; if (jump != 0) jump = 0; }
+            if (need_msg_adj) { snprintf(msg, sizeof msg, "right stick now adjusts: %s", ADJ_NAME[adj_target]); msg_until = t + 3; need_msg_adj = 0; }
+            if (fabs(rs) > 0.15) {
+                if (adj_target == 0) { o.vscale *= exp(dt * rs * 0.7); if (o.vscale < 0.2) o.vscale = 0.2; if (o.vscale > 6) o.vscale = 6; if (jump != 0) jump = 0; }
+                else if (adj_target == 4) { o.hud_flat = 0; o.hud_below += rs * dt * 60; if (o.hud_below < 0) o.hud_below = 0; if (o.hud_below > 160) o.hud_below = 160; }
+                else if (front.loaded) {                                                   /* the world's tilt, floor, ceiling: per scene, rebuilt by the worker */
+                    SDL_LockMutex(W.mu); SurAdj *ad = NULL;
+                    for (int i = 0; i < W.nadj; i++) if (W.adj[i].scene == cur_scene) ad = &W.adj[i];
+                    if (!ad) { if (W.nadj == W.capadj) { W.capadj = W.capadj ? W.capadj * 2 : 8; W.adj = realloc(W.adj, (size_t)W.capadj * sizeof *W.adj); } ad = &W.adj[W.nadj++]; memset(ad, 0, sizeof *ad); ad->scene = cur_scene; }
+                    if (adj_target == 1) { if (!ad->has[0]) { ad->has[0] = 1; ad->pitch = front.scene.pitch_deg; } ad->pitch += rs * dt * 6; if (ad->pitch < -45) ad->pitch = -45; if (ad->pitch > 45) ad->pitch = 45; changed = 1; }
+                    else if (adj_target == 2 && !isnan(front.scene.ground_y)) { if (!ad->has[1]) { ad->has[1] = 1; ad->ground = front.scene.ground_y; } ad->ground += rs * dt * 0.5; if (ad->ground > -0.2) ad->ground = -0.2; if (ad->ground < -12) ad->ground = -12; changed = 1; }
+                    else if (adj_target == 3 && !isnan(front.scene.ceil_y)) { if (!ad->has[2]) { ad->has[2] = 1; ad->ceil = front.scene.ceil_y; } ad->ceil += rs * dt * 0.5; if (ad->ceil < 0.2) ad->ceil = 0.2; if (ad->ceil > 12) ad->ceil = 12; changed = 1; }
+                    SDL_UnlockMutex(W.mu);
+                }
+            }
             if (x_edge && has_sel) {                                                    /* reset the selected group */
                 SDL_LockMutex(W.mu); for (int i = 0; i < W.nov; i++) if (W.ov[i].scene == cur_scene && spec_same(&W.ov[i].s, &sel)) { W.ov[i] = W.ov[--W.nov]; break; } SDL_UnlockMutex(W.mu);
                 changed = 1; snprintf(msg, sizeof msg, "reset %s", "the selected group"); msg_until = t + 3;
@@ -622,12 +650,12 @@ int main(int argc, char **argv) {
             if (has_sel && ni) { char d[80]; spec_desc(&sel, d, sizeof d); snprintf(l, sizeof l, "SELECTED: %s (%s, %d item%s)   depth %.1f m   scale x%.2f", d, scope ? "this sprite type" : "whole layer", ni, ni == 1 ? "" : "s", zm * zs, kk); }
             else snprintf(l, sizeof l, "Point at a layer and pull the trigger to select it");
             panel_set(&panel, 1, l);
-            snprintf(l, sizeof l, "viewport x%.2f = %.2f m wide at %.2f m, depth x%.2f     %s", o.vscale, vw_m, o.sdist, zs, jump != 0 ? "JUMPED to the layer (real size)" : "at the playing area"); panel_set(&panel, 2, l);
+            snprintf(l, sizeof l, "%cviewport x%.2f (%.2f m)   %ctilt %.1f deg   %cfloor %s   %cceiling %s   %cHUD %.0f px below   %s", adj_target == 0 ? '>' : ' ', o.vscale, vw_m, adj_target == 1 ? '>' : ' ', front.loaded ? front.scene.pitch_deg : 0.0, adj_target == 2 ? '>' : ' ', front.loaded && !isnan(front.scene.ground_y) ? (snprintf(adjf, sizeof adjf, "%.2f m", front.scene.ground_y), adjf) : "-", adj_target == 3 ? '>' : ' ', front.loaded && !isnan(front.scene.ceil_y) ? (snprintf(adjc, sizeof adjc, "%.2f m", front.scene.ceil_y), adjc) : "-", adj_target == 4 ? '>' : ' ', o.hud_flat ? 0.0 : o.hud_below, jump != 0 ? "JUMPED" : ""); panel_set(&panel, 2, l);
             panel_set(&panel, 3, t < msg_until ? msg : (scn ? "stick left / right: previous / next scene" : ""));
             /* controls on the left (turn your head left), this scene's edits on the right */
             static const char *help[] = { "CONTROLS (paused)", "", "trigger          select a layer", "grip             layer / sprite type", "left stick       scale the layer", "                 (up = farther, bigger)",
-                                          "right stick      viewport size", "A                jump to layer / back", "B                save the edits", "X                reset selected", "Y                reset all of this scene", "left stick click resume the game" };
-            for (int i = 0; i < PANEL_LINES; i++) panel_set(&side_l, i, i < 12 ? help[i] : "");
+                                          "right stick      adjust (see >)", "A                jump to layer / back", "B                save the edits", "X                reset selected", "Y                reset all of this scene", "left stick click resume the game", "right stick click next adjust:", "viewport / tilt / floor / ceiling / HUD" };
+            for (int i = 0; i < PANEL_LINES; i++) panel_set(&side_l, i, i < 14 ? help[i] : "");
             int row = 0; char r[200];
             snprintf(r, sizeof r, "EDITS IN SCENE #%d", cur_scene); panel_set(&side_r, row++, r); panel_set(&side_r, row++, "");
             SDL_LockMutex(W.mu);
@@ -655,7 +683,7 @@ int main(int argc, char **argv) {
                     M4 mvp = m4_mul(proj[e], view[e]);
                     if (front.loaded) draw_scene(&gfx, &front, &mvp);
                     if (paused || t < msg_until) {
-                        M4 pv_ = m4_mul(proj[e], m4_rigid_inverse(m4_from_pose(xr.views[e].pose))); M4 s2p = m4_mul(m4_yaw_pos(yaw0, origin), m4_mul(m4_trans(0, 0, jump), m4_scale_z(zs)));
+                        M4 pv_ = m4_mul(proj[e], m4_rigid_inverse(m4_from_pose(xr.views[e].pose))); M4 s2p = m4_mul(m4_yaw_pos(yaw0, origin), m4_mul(m4_trans(0, 0, jump), m4_model(zs, pitch_r)));
                         if (paused && has_sel && front.loaded) for (int i = 0; i < front.scene.n; i++) {          /* outline every item of the selected group */
                             const Nb1Item *it = &front.scene.items[i]; if (!spec_matches(&sel, it)) continue;
                             double Pq[16][3]; int mm = item_polygon(it, front.scene.far, Pq); if (mm < 3) continue;
@@ -667,9 +695,22 @@ int main(int argc, char **argv) {
                         if (paused) panel_draw(&gfx, &side_l, &pv_, m4_yaw_pos(yaw0 + 0.95, origin), 1.0, 0.16, 0.0013, 1);       /* turn left: the controls */
                         if (paused) panel_draw(&gfx, &side_r, &pv_, m4_yaw_pos(yaw0 - 0.95, origin), 1.0, 0.16, 0.0013, 1);       /* turn right: this scene's edits */
                     }
+                    if (!o.no_brackets && front.loaded) {                              /* white corner marks round the play window, like a camera viewfinder */
+                        M4 pv_ = m4_mul(proj[e], m4_rigid_inverse(m4_from_pose(xr.views[e].pose))); M4 s2p = m4_mul(m4_yaw_pos(yaw0, origin), m4_mul(m4_trans(0, 0, jump), m4_model(zs, pitch_r)));
+                        double zb = o.sdist / zs, Fz = zb / NB1_FOCAL, L = 28; float seg[8 * 2 * 3]; int nv = 0;
+                        for (int cxi = 0; cxi < 2; cxi++) for (int cyi = 0; cyi < 2; cyi++) {
+                            double px = cxi ? NB1_W : 0, py = cyi ? NB1_H : 0, dx = cxi ? -L : L, dy = cyi ? -L : L;
+                            double pts[3][2] = { { px + dx, py }, { px, py }, { px, py + dy } };
+                            for (int q = 0; q < 2; q++) for (int k = 0; k < 2; k++) {
+                                double P[3] = { (pts[q + k][0] - NB1_W / 2.0) * Fz, (NB1_H / 2.0 - pts[q + k][1]) * Fz, -zb }, O3[3]; m4_point(s2p, P, O3);
+                                seg[nv * 3] = (float)O3[0]; seg[nv * 3 + 1] = (float)O3[1]; seg[nv * 3 + 2] = (float)O3[2]; nv++;
+                            }
+                        }
+                        draw_lines(&gfx, &pv_, seg, nv, 1.0f, 1.0f, 1.0f);
+                    }
                     if (have_ray) {                                                   /* laser and a small cross where it lands (physical coordinates) */
                         M4 pv_ = m4_mul(proj[e], m4_rigid_inverse(m4_from_pose(xr.views[e].pose)));
-                        double tip[3]; if (have_hit) memcpy(tip, hit_phys, sizeof tip); else { M4 sp = m4_mul(m4_yaw_pos(yaw0, origin), m4_mul(m4_trans(0, 0, jump), m4_scale_z(zs))); double far_s[3] = { ray_o[0] + ray_d[0] * 6, ray_o[1] + ray_d[1] * 6, ray_o[2] + ray_d[2] * 6 }; m4_point(sp, far_s, tip); }
+                        double tip[3]; if (have_hit) memcpy(tip, hit_phys, sizeof tip); else { M4 sp = m4_mul(m4_yaw_pos(yaw0, origin), m4_mul(m4_trans(0, 0, jump), m4_model(zs, pitch_r))); double far_s[3] = { ray_o[0] + ray_d[0] * 6, ray_o[1] + ray_d[1] * 6, ray_o[2] + ray_d[2] * 6 }; m4_point(sp, far_s, tip); }
                         float L[6] = { (float)ctl_pos[0], (float)ctl_pos[1], (float)ctl_pos[2], (float)tip[0], (float)tip[1], (float)tip[2] };
                         draw_lines(&gfx, &pv_, L, 2, trig ? 1.0f : 0.2f, trig ? 0.9f : 0.9f, trig ? 0.2f : 0.3f);
                         if (have_hit) { const float s = 0.02f; float X[8 * 3] = { (float)tip[0] - s, (float)tip[1], (float)tip[2], (float)tip[0] + s, (float)tip[1], (float)tip[2], (float)tip[0], (float)tip[1] - s, (float)tip[2], (float)tip[0], (float)tip[1] + s, (float)tip[2] };

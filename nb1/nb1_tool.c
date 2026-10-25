@@ -137,9 +137,20 @@ static int seltest_cmd(int argc, char **argv) {
     nb1_selector_free(sl); nb1_tableset_free(ts); return 0;
 }
 
+/* nb1_tool surround ROMS STATE_Z...: build each frozen scene and print what the surround finds (run with NB1_DEBUG=1) */
+static int surround_cmd(int argc, char **argv) {
+    Nb1Roms roms; if (nb1_roms_load(&roms, argv[2])) return 1;
+    for (int i = 3; i < argc; i++) {
+        Nb1State *st = nb1_state_load_z(argv[i]); if (!st) { fprintf(stderr, "cannot read %s\n", argv[i]); continue; }
+        fprintf(stderr, "== %s\n", argv[i]); Nb1Scene sc; Nb1Table *tb = getenv("PB_TABLE") ? nb1_table_load(getenv("PB_TABLE")) : NULL; nb1_build_scene(st, st, &roms, tb, &sc); nb1_scene_add_surround(&sc, st, &roms, tb); nb1_table_free(tb); nb1_scene_free(&sc); free(st);
+    }
+    return 0;
+}
+
 int main(int argc, char **argv) {
     if (argc >= 4 && !strcmp(argv[1], "select")) return select_cmd(argc, argv);
     if (argc >= 6 && !strcmp(argv[1], "seltest")) return seltest_cmd(argc, argv);
+    if (argc >= 4 && !strcmp(argv[1], "surround")) return surround_cmd(argc, argv);
     if (argc >= 2 && !strcmp(argv[1], "dump")) return dump(argc, argv);
     fprintf(stderr, "usage: nb1_tool dump ROMDIR TILE_STATE SPR_STATE TABLE|- OUTDIR\n"); return 2;
 }

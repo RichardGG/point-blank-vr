@@ -196,7 +196,7 @@ typedef struct {
     Nb1Scene scene; int32_t *ids; int loaded;
     Draw *draws; int ndraws; Vtx *verts; int nverts, capverts;
     int *order;                      /* item indices sorted by arcade order */
-    Ruler *rulers; int nrulers; Vtx *rverts; int nrverts, caprverts; Label *labels; int nlabels; double zs; int no_rulers; int surround; int scroll_hint[4];   /* metre rulers beside each depth layer */
+    Ruler *rulers; int nrulers; Vtx *rverts; int nrverts, caprverts; Label *labels; int nlabels; double zs; int no_rulers; int surround; int scroll_hint[4]; int adj_has[3]; double adj_pitch, adj_ground, adj_ceil, hud_dy;     /* hud_dy: the HUD is moved this many arcade pixels down, off the picture */   /* metre rulers beside each depth layer */
 } GlScene;
 
 static void push_vtx(GlScene *g, double x, double y, double z, double u, double v) {
@@ -247,13 +247,13 @@ static int item_polygon(const Nb1Item *it, double far, double (*P)[3]) {
 #ifndef GL_MIRRORED_REPEAT
 #define GL_MIRRORED_REPEAT 0x8370
 #endif
-static GLuint make_tex_wrap(const uint8_t *rgba, int w, int h, int wrap) {
+static GLuint make_tex_wrap(const uint8_t *rgba, int w, int h, int wrap, int wrap_t) {
     GLuint t; glGenTextures(1, &t); glBindTexture(GL_TEXTURE_2D, t);
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
-    GLint m = wrap == 1 ? GL_REPEAT : wrap == 2 ? GL_MIRRORED_REPEAT : GL_CLAMP_TO_EDGE;
+    GLint m = wrap == 1 ? GL_REPEAT : wrap == 2 ? GL_MIRRORED_REPEAT : GL_CLAMP_TO_EDGE, mt = wrap_t == 1 ? GL_REPEAT : wrap_t == 2 ? GL_MIRRORED_REPEAT : GL_CLAMP_TO_EDGE;
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR); glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, m); glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, m);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, m); glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, mt);
     return t;
 }
 static GLuint make_tex(const uint8_t *rgba, int w, int h) {
@@ -352,14 +352,15 @@ static void gl_scene_free(GlScene *g) {
     for (int i = 0; i < g->ndraws; i++) { if (g->draws[i].tex) glDeleteTextures(1, &g->draws[i].tex); if (g->draws[i].shadow_tex) glDeleteTextures(1, &g->draws[i].shadow_tex); }
     free(g->draws); free(g->verts); free(g->order); free(g->ids);
     if (g->loaded) nb1_scene_free(&g->scene);
-    { double zs_ = g->zs; int nr_ = g->no_rulers, su_ = g->surround, sh_[4]; memcpy(sh_, g->scroll_hint, sizeof sh_); memset(g, 0, sizeof *g); g->zs = zs_; g->no_rulers = nr_; g->surround = su_; memcpy(g->scroll_hint, sh_, sizeof sh_); }
+    { double zs_ = g->zs; int nr_ = g->no_rulers, su_ = g->surround, sh_[4], ah_[3]; double ap_ = g->adj_pitch, ag_ = g->adj_ground, ac_ = g->adj_ceil, hd_ = g->hud_dy; memcpy(sh_, g->scroll_hint, sizeof sh_); memcpy(ah_, g->adj_has, sizeof ah_);
+      memset(g, 0, sizeof *g); g->zs = zs_; g->no_rulers = nr_; g->surround = su_; memcpy(g->scroll_hint, sh_, sizeof sh_); memcpy(g->adj_has, ah_, sizeof ah_); g->adj_pitch = ap_; g->adj_ground = ag_; g->adj_ceil = ac_; g->hud_dy = hd_; }
 }
 
 /* CPU half of a scene build (no GL calls, so a worker thread may run it); gl_scene_upload() does the rest on the GL thread */
 static void gl_scene_cpu(GlScene *g, const Nb1State *st, const Nb1Roms *roms, const Nb1Table *tab) {
     gl_scene_free(g);
     nb1_build_scene(st, st, roms, tab, &g->scene); g->loaded = 1;
-    if (g->surround) { memcpy(g->scene.scroll_hint, g->scroll_hint, sizeof g->scene.scroll_hint); nb1_scene_add_surround(&g->scene, st, roms, tab); }
+    if (g->surround) { memcpy(g->scene.scroll_hint, g->scroll_hint, sizeof g->scene.scroll_hint); memcpy(g->scene.adj_has, g->adj_has, sizeof g->adj_has); g->scene.adj_pitch = g->adj_pitch; g->scene.adj_ground = g->adj_ground; g->scene.adj_ceil = g->adj_ceil; nb1_scene_add_surround(&g->scene, st, roms, tab); }
     g->ids = malloc(NB1_W * NB1_H * 4); nb1_visible_map(&g->scene, g->ids);
     int n = g->scene.n; g->draws = calloc(n, sizeof *g->draws); g->order = malloc(n * sizeof *g->order);
     for (int i = 0; i < n; i++) g->order[i] = i;
@@ -375,6 +376,7 @@ static void gl_scene_cpu(GlScene *g, const Nb1State *st, const Nb1Roms *roms, co
             continue;
         }
         double P[16][3]; int m = item_polygon(it, g->scene.far, P);
+        if (it->hud && g->hud_dy != 0) for (int k = 0; k < m; k++) P[k][1] -= g->hud_dy * it->z / NB1_FOCAL;          /* HUD off the picture: down by hud_dy arcade pixels */
         d->first = g->nverts; d->count = 0; d->mode = it->has_plane ? 1 : 0;
         d->box[0] = it->x0; d->box[1] = it->y0; d->box[2] = it->w; d->box[3] = it->h;
         if (m >= 3) {
@@ -390,7 +392,7 @@ static void gl_scene_cpu(GlScene *g, const Nb1State *st, const Nb1Roms *roms, co
 static void gl_scene_upload(GlScene *g) {
     for (int i = 0; i < g->scene.n; i++) {
         const Nb1Item *it = &g->scene.items[i]; Draw *d = &g->draws[i];
-        d->tex = it->kind == NB1_SURROUND ? make_tex_wrap(it->tex, it->w, it->h, it->wrap) : make_tex(it->tex, it->w, it->h);
+        d->tex = it->kind == NB1_SURROUND ? make_tex_wrap(it->tex, it->w, it->h, it->wrap, it->wrap_t < 0 ? it->wrap : it->wrap_t) : make_tex(it->tex, it->w, it->h);
         if (it->shadow) {                                          /* mask of the shadow pens (pen -2) */
             size_t N = (size_t)it->w * it->h; uint8_t *mk = calloc(N, 4);
             for (size_t k = 0; k < N; k++) if (it->pen[k] == -2) mk[k * 4 + 3] = 255;

@@ -25,4 +25,10 @@ t = json.load(open(a.table)); cur = t.get('scales', [])
 for n in snip:
     cur = [c for c in cur if c['match'] != n['match']] + [n]
 t['scales'] = cur
-json.dump(t, open(a.out or a.table, 'w'), indent=1); print(f"wrote {len(snip)} scale(s) from the save of {last[-1]['saved']} into {a.out or a.table}")
+w = last[-1].get('world')
+if w:                                   # tilt / floor / ceiling the editor changed (adjusted flags) go into the table's surround recipe
+    sur = t.setdefault('surround', {})
+    if w.get('pitch_adjusted'): sur['pitch'] = w['pitch_deg']
+    if w.get('ground_adjusted') and w.get('ground_y_m') is not None and 'ground' in sur: sur['ground']['y'] = w['ground_y_m']; sur['ground'].pop('base_row', None)
+    if w.get('ceiling_adjusted') and w.get('ceiling_y_m') is not None and 'ceiling' in sur: sur['ceiling']['y'] = w['ceiling_y_m']
+json.dump(t, open(a.out or a.table, 'w'), indent=1); print('world:', w); print(f"wrote {len(snip)} scale(s) from the save of {last[-1]['saved']} into {a.out or a.table}")

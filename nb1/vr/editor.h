@@ -50,7 +50,7 @@ static OvEntry *ov_find(OvEntry *ov, int nov, int scene, const Nb1ScaleSpec *s) 
 }
 
 /* ---- text panel (head-up lines drawn in the world, in front of the arcade eye's frame) */
-#define PANEL_LINES 12
+#define PANEL_LINES 14
 typedef struct { char text[PANEL_LINES][200]; GLuint tex[PANEL_LINES]; int tw[PANEL_LINES], th[PANEL_LINES]; } Panel;
 static void panel_set(Panel *p, int i, const char *s) {
     if (!strcmp(p->text[i], s) && p->tex[i]) return;
