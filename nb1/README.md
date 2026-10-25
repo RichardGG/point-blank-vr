@@ -41,5 +41,5 @@ the arcade-eye view and five orbit views; the aim solver on a fixed ray set; the
 `nb1_visible_map()` records which item the arcade shows at each pixel; `nb1_aim_snap()` moves the aimed pixel (within 24 px) to a pixel
 where the hit item is visible to the arcade eye, flags `snapped` / `hidden` / `cover`, and returns 0 on a miss (no fallback plane: the
 caller keeps its last pixel). Measured on three scenes at yaw 20-85 degrees with random mouse rays: pixels where the hit item was visible to
-the game went from 71% (e.g. 1100 yaw 70: 62 of 83) to 99% of hits; the rest are items fully covered or more than 24 px from a visible pixel.
+the game went from 76% (381 of 498 hits; e.g. 1100 yaw 70: 62 of 83) to 98% (489 of 498); the rest are items fully covered or more than 24 px from a visible pixel.
 Checked against the Python `aim_snap` (2,700 rays x 3 frames x 3 tables) and its id map (0 px differ).
