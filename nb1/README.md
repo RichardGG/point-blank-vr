@@ -82,3 +82,9 @@ What was checked (headless, Mesa software OpenGL under Xvfb; nothing here was ru
 * End to end with real MAME 0.264 and a saved state: the game renders live, a scene build takes about 20 ms.
 Known gaps: sprite shadow pens (fades) are drawn as a flat 50% darkening, not through the palette; no outline / label overlays yet; no sound (MAME can
 play it with `--sound`); the gun registers are still written by the MAME script from `aim.txt` (as before).
+
+## Automatic table selection
+`nb1_tableset_load("scene_tables.json")` + `nb1_tableset_select(...)` pick a depth table per frame (the Python twin is `depthscene.select_table`).
+Entries match by exact sprite codes (`codes_all` / `codes_any`, first wins) or by background-art similarity to captured reference scenes
+(`art_scenes`, `min_similarity`, Jaccard over (layer, tile code) pairs from `scene_refs.json`; the most similar entry wins). `pbdesk --tables scene_tables.json`
+uses it; an explicit `--table` overrides. `tests/run_select.py` checks C against Python (318 of 318 states agreed). See the research repo's `research/DEPTH-SCENES.md`.

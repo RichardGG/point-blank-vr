@@ -175,6 +175,54 @@ def apply_decals(items, table=DEFAULT_TABLE):
     return items
 
 
+# ------------------------------------------------------------------ automatic table selection (scene_tables.json)
+def art_pairs(st):
+    """{(layer, tile code)} of the enabled scrolling tilemap layers 0-3: the background art on screen, independent of scroll position."""
+    out = set()
+    for L in range(4):
+        if int(st.ctl[0x10 + L]) & 8: continue
+        out |= {(L, int(c)) for c in np.unique(st.vram[R.TM_OFF[L]:R.TM_OFF[L] + 4096])}
+    return out
+
+def sprite_codes(sst):
+    """First-tile code (bank + offset applied) of every sprite entry: the same key items carry."""
+    codes = set()
+    for sp in R.sprite_entries(sst):
+        if sp['tiles']:
+            t = sp['tiles'][0][0]; codes.add(((t & 0x7ff) | (int(sst.bank[t >> 11]) << 11)) + sp['offset'])
+    return codes
+
+def load_table_set(path):
+    """scene_tables.json (+ scene_refs.json beside it).  Entry: {"name", "table", "when": {"codes_all", "codes_any", "art_scenes", "min_similarity"}}.
+    Entries with codes_* match exactly; entries with art_scenes match when the state's background art is at least min_similarity (default 0.8,
+    Jaccard on (layer, tile code) pairs) like one of those captured reference scenes.  Codes entries win in order; among art entries the
+    most similar wins."""
+    base = os.path.dirname(os.path.abspath(path)); rules = json.load(open(path))
+    rp = os.path.join(base, 'scene_refs.json'); refs = {k: {(int(L), c) for L, cs in v.items() for c in cs} for k, v in json.load(open(rp)).items()} if os.path.exists(rp) else {}
+    return dict(base=base, rules=rules, refs=refs)
+
+def select_table(tset, st, sst=None):
+    """-> (entry name, table dict with '_path') or (None, None)."""
+    sst = sst or st; codes = None; pairs = None; best = None
+    for r in tset['rules']:
+        w = r['when']
+        if 'art_scenes' in w:
+            if pairs is None: pairs = art_pairs(st)
+            sim = 0.0
+            for sid in w['art_scenes']:
+                ref = tset['refs'].get(str(sid))
+                if ref:
+                    u = pairs | ref
+                    sim = max(sim, len(pairs & ref) / len(u) if u else 0.0)
+            if sim >= w.get('min_similarity', 0.8) and (best is None or sim > best[0] + 1e-12): best = (sim, r)
+        else:
+            if codes is None: codes = sprite_codes(sst)
+            if all(c in codes for c in w.get('codes_all', [])) and (not w.get('codes_any') or any(c in codes for c in w['codes_any'])):
+                best = (2.0, r); break          # exact code matches take precedence, first one wins
+    if best is None: return None, None
+    r = best[1]; p = os.path.join(tset['base'], r['table']); t = json.load(open(p)); t['_path'] = p
+    return r['name'], t
+
 # ------------------------------------------------------------------ editing: your own art, punch-outs, splits
 def _label(it):
     return f"{it.kind}{it.id}" + (f"_{it.key}" if it.key is not None else "")

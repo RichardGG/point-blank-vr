@@ -98,7 +98,18 @@ static int dump(int argc, char **argv) {
     return 0;
 }
 
+/* nb1_tool select SCENE_TABLES.json STATE... : print the table name chosen for each state file ("-" = none) */
+static int select_cmd(int argc, char **argv) {
+    Nb1TableSet *ts = nb1_tableset_load(argv[2]); if (!ts) { fprintf(stderr, "cannot load %s\n", argv[2]); return 1; }
+    for (int i = 3; i < argc; i++) {
+        Nb1State *st = nb1_state_load(argv[i]); if (!st) { printf("%s\t?\n", argv[i]); continue; }
+        const char *name; nb1_tableset_select(ts, st, st, &name); printf("%s\t%s\n", argv[i], name ? name : "-"); free(st);
+    }
+    nb1_tableset_free(ts); return 0;
+}
+
 int main(int argc, char **argv) {
+    if (argc >= 4 && !strcmp(argv[1], "select")) return select_cmd(argc, argv);
     if (argc >= 2 && !strcmp(argv[1], "dump")) return dump(argc, argv);
     fprintf(stderr, "usage: nb1_tool dump ROMDIR TILE_STATE SPR_STATE TABLE|- OUTDIR\n"); return 2;
 }

@@ -50,6 +50,14 @@ Nb1Table *nb1_table_load(const char *path);          /* NULL on error */
 void nb1_table_free(Nb1Table *t);
 double nb1_table_far(const Nb1Table *t);
 
+/* ---- automatic table selection (scene_tables.json + scene_refs.json beside it; same rules as depthscene.select_table in the oracle):
+ * an entry matches by exact sprite codes ("codes_all" / "codes_any": the first such entry wins) or by background-art similarity to captured
+ * reference scenes ("art_scenes" + "min_similarity", Jaccard on (layer, tile code) pairs: the most similar entry wins). */
+typedef struct Nb1TableSet Nb1TableSet;
+Nb1TableSet *nb1_tableset_load(const char *scene_tables_json);          /* loads every table it names; NULL on error */
+const Nb1Table *nb1_tableset_select(const Nb1TableSet *ts, const Nb1State *st, const Nb1State *sst, const char **name);   /* NULL = none matches */
+void nb1_tableset_free(Nb1TableSet *ts);
+
 /* ---- scene */
 enum { NB1_TILEMAP = 0, NB1_SPRITE = 1, NB1_MASK = 2 };
 typedef struct {

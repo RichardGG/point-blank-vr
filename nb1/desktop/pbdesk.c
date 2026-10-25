@@ -1,6 +1,6 @@
 /* pbdesk: desktop viewer for the NB-1 depth scene (SDL2 + OpenGL 3.3 core).
  *
- *   pbdesk --roms DIR (--ipc DIR | --state FILE) [--table T.json] [--res WxH] [--yaw N] [--pitch N] [--dist N] [--focus N] [--focal N]
+ *   pbdesk --roms DIR (--ipc DIR | --state FILE) [--table T.json | --tables scene_tables.json] [--res WxH] [--yaw N] [--pitch N] [--dist N] [--focus N] [--focal N]
  *          [--hide-hud] [--shot out.ppm [--shot-after N]]
  *
  * --ipc   directory written by tools/play/pbplay.lua (MAME): state files in, aim.txt out (the same protocol as pbview.py)
@@ -298,13 +298,13 @@ static void put_text(uint8_t *buf, int bw, int bh, int x, int y, const char *s) 
 
 /* ---------------------------------------------------------------- app */
 typedef struct {
-    char roms[512], ipc[512], statefile[512], table[512], shot[512];
+    char roms[512], ipc[512], statefile[512], table[512], tables[512], shot[512];
     int w, h, mode, hide_hud, use_table, paused, shot_after, show_help, no_text, shot_game_frame, frames_limit, mouse_x, mouse_y, mouse_set, trigger_set;
     double yaw, pitch, dist, focus, focal;
 } Opts;
 
 static void die_usage(void) {
-    fprintf(stderr, "usage: pbdesk --roms DIR (--ipc DIR | --state FILE) [--table T.json] [--res WxH] [--yaw N] [--pitch N] [--dist N]\n"
+    fprintf(stderr, "usage: pbdesk --roms DIR (--ipc DIR | --state FILE) [--table T.json | --tables scene_tables.json] [--res WxH] [--yaw N] [--pitch N] [--dist N]\n"
                     "              [--focus N] [--focal N] [--hide-hud] [--no-text] [--shot out.ppm [--shot-after N | --shot-game-frame N]]\n");
     exit(2);
 }
@@ -326,6 +326,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(a, "--ipc") && v) { snprintf(o.ipc, sizeof o.ipc, "%s", v); i++; }
         else if (!strcmp(a, "--state") && v) { snprintf(o.statefile, sizeof o.statefile, "%s", v); i++; }
         else if (!strcmp(a, "--table") && v) { snprintf(o.table, sizeof o.table, "%s", v); i++; }
+        else if (!strcmp(a, "--tables") && v) { snprintf(o.tables, sizeof o.tables, "%s", v); i++; }          /* scene_tables.json: pick a table per scene */
         else if (!strcmp(a, "--res") && v) { if (sscanf(v, "%dx%d", &o.w, &o.h) != 2) die_usage(); i++; }
         else if (!strcmp(a, "--yaw") && v) { o.yaw = atof(v); yaw_given = 1; o.mode = 2; i++; }
         else if (!strcmp(a, "--pitch") && v) { o.pitch = atof(v); i++; }
@@ -349,6 +350,9 @@ int main(int argc, char **argv) {
     Nb1Table *tab = o.table[0] ? nb1_table_load(o.table) : NULL;
     if (o.table[0] && !tab) { fprintf(stderr, "pbdesk: cannot read table %s (using the default)\n", o.table); }
     Nb1Table *deftab = nb1_table_default();
+    Nb1TableSet *tset = (o.tables[0] && !o.table[0]) ? nb1_tableset_load(o.tables) : NULL;     /* an explicit --table wins */
+    if (o.tables[0] && !o.table[0] && !tset) fprintf(stderr, "pbdesk: cannot read %s (using the default table)\n", o.tables);
+    const char *table_name = NULL;
 
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS) < 0) { fprintf(stderr, "pbdesk: SDL: %s\n", SDL_GetError()); return 1; }
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3); SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
@@ -393,7 +397,8 @@ int main(int argc, char **argv) {
                 case SDLK_2: o.mode = 2; break;
                 case SDLK_h: o.hide_hud = !o.hide_hud; break;
                 case SDLK_t: o.use_table = !o.use_table; dirty = 1; break;
-                case SDLK_r: if (o.table[0]) { Nb1Table *nt = nb1_table_load(o.table); if (nt) { nb1_table_free(tab); tab = nt; dirty = 1; } else fprintf(stderr, "pbdesk: table reload failed\n"); } break;
+                case SDLK_r: if (tset) { Nb1TableSet *nt = nb1_tableset_load(o.tables); if (nt) { nb1_tableset_free(tset); tset = nt; dirty = 1; } else fprintf(stderr, "pbdesk: tables reload failed\n"); }
+                          if (o.table[0]) { Nb1Table *nt = nb1_table_load(o.table); if (nt) { nb1_table_free(tab); tab = nt; dirty = 1; } else fprintf(stderr, "pbdesk: table reload failed\n"); } break;
                 case SDLK_p: o.paused = !o.paused; break;
                 case SDLK_F1: o.show_help = !o.show_help; break;
                 case SDLK_F5: { char fn[64]; snprintf(fn, sizeof fn, "pbdesk_%ld.ppm", (long)time(NULL)); o.shot_after = -1; snprintf(o.shot, sizeof o.shot, "%s", fn); break; }
@@ -427,7 +432,10 @@ int main(int argc, char **argv) {
         if (!o.paused) { unsigned fr = 0; Nb1State *ns = poll_state(&src, &fr); if (ns) { free(cur); cur = ns; game_frame = fr; dirty = 1; } }
         if (dirty && cur) {
             Uint64 t0 = SDL_GetPerformanceCounter();
-            gl_scene_build(&gs, cur, &roms, (o.use_table && tab) ? tab : deftab);
+            const Nb1Table *use = deftab; table_name = NULL;
+            if (o.use_table && tab) use = tab;
+            else if (o.use_table && tset) { const Nb1Table *sel = nb1_tableset_select(tset, cur, cur, &table_name); if (sel) use = sel; else table_name = NULL; }
+            gl_scene_build(&gs, cur, &roms, use);
             build_ms = (double)(SDL_GetPerformanceCounter() - t0) * 1000.0 / SDL_GetPerformanceFrequency();
             glBindBuffer(GL_ARRAY_BUFFER, vbo); glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)gs.nverts * sizeof(Vtx), gs.verts, GL_DYNAMIC_DRAW);
             shown_frame = game_frame; dirty = 0;
@@ -498,7 +506,7 @@ int main(int argc, char **argv) {
         }
         /* status text */
         if (!o.no_text) {
-            char l1[256], l2[640]; const char *tn = !o.use_table ? "off (auto depth)" : (o.table[0] ? strrchr(o.table, '/') ? strrchr(o.table, '/') + 1 : o.table : "default");
+            char l1[256], l2[640]; const char *tn = !o.use_table ? "off (auto depth)" : (o.table[0] ? strrchr(o.table, '/') ? strrchr(o.table, '/') + 1 : o.table : (table_name ? table_name : "default"));
             snprintf(l1, sizeof l1, "%s  yaw %.1f pitch %.1f dist %.1f focus %.1f   game frame %u  build %.0f ms%s", o.mode == 1 ? "ARCADE" : "ORBIT", o.yaw, o.pitch, o.dist, o.focus, shown_frame, build_ms, o.paused ? "  PAUSED" : "");
             snprintf(l2, sizeof l2, "table: %s   F1 help", tn);
             const char *help[] = { "1 arcade view  2 orbit  A/D yaw  W/S pitch  Q/E distance  Z/X focus  right-drag or Alt+drag orbit  wheel distance",
@@ -530,7 +538,7 @@ int main(int argc, char **argv) {
         Uint64 now = SDL_GetPerformanceCounter(); (void)t_prev; t_prev = now;
         if (o.shot[0]) SDL_Delay(2);
     }
-    gl_scene_free(&gs); free(cur); nb1_table_free(tab); nb1_table_free(deftab); nb1_roms_free(&roms);
+    gl_scene_free(&gs); free(cur); nb1_tableset_free(tset); nb1_table_free(tab); nb1_table_free(deftab); nb1_roms_free(&roms);
     SDL_GL_DeleteContext(ctx); SDL_DestroyWindow(win); SDL_Quit();
     return 0;
 }
