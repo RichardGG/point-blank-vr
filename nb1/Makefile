@@ -26,6 +26,10 @@ pbdesk: $(SRC) desktop/pbdesk.c desktop/font7x13.h nb1.h nb1_internal.h nb1_json
 	echo "  macOS (Homebrew):  brew install sdl2"; echo "  Debian / Ubuntu:   sudo apt install libsdl2-dev libgl-dev"; echo; exit 1; fi
 	$(CC) $(CFLAGS) $(SDL_CFLAGS) -o $@ $(SRC) desktop/pbdesk.c $(SDL_LIBS) $(GL_LIBS) -lm -lz
 
+# PC VR host (OpenXR loader is loaded at run time; needs the OpenXR headers: apt install libopenxr-dev). Windows: see vr/README.md
+pbvr: $(SRC) vr/pbvr.c desktop/glscene.h nb1.h nb1_internal.h nb1_json.h
+	$(CC) $(CFLAGS) -Wno-missing-field-initializers -Wno-unused-function -Wno-unused-variable -Wno-misleading-indentation $(SDL_CFLAGS) -o $@ $(SRC) vr/pbvr.c $(SDL_LIBS) $(GL_LIBS) -lX11 -ldl -lm -lz
+
 clean:
-	rm -f nb1_tool pbdesk
+	rm -f nb1_tool pbdesk pbvr
 .PHONY: clean

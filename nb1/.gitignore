@@ -2,3 +2,5 @@ nb1_tool
 *.o
 pbdesk
 *.ppm
+pbvr
+build-win

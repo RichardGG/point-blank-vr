@@ -175,7 +175,7 @@ typedef struct {
     Nb1Scene scene; int32_t *ids; int loaded;
     Draw *draws; int ndraws; Vtx *verts; int nverts, capverts;
     int *order;                      /* item indices sorted by arcade order */
-    Ruler *rulers; int nrulers; Vtx *rverts; int nrverts, caprverts; Label *labels; int nlabels; double zs;   /* metre rulers beside each depth layer */
+    Ruler *rulers; int nrulers; Vtx *rverts; int nrverts, caprverts; Label *labels; int nlabels; double zs; int no_rulers;   /* metre rulers beside each depth layer */
 } GlScene;
 
 static void push_vtx(GlScene *g, double x, double y, double z, double u, double v) {
@@ -319,7 +319,7 @@ static void gl_scene_free(GlScene *g) {
     for (int i = 0; i < g->ndraws; i++) { if (g->draws[i].tex) glDeleteTextures(1, &g->draws[i].tex); if (g->draws[i].shadow_tex) glDeleteTextures(1, &g->draws[i].shadow_tex); }
     free(g->draws); free(g->verts); free(g->order); free(g->ids);
     if (g->loaded) nb1_scene_free(&g->scene);
-    { double zs_ = g->zs; memset(g, 0, sizeof *g); g->zs = zs_; }
+    { double zs_ = g->zs; int nr_ = g->no_rulers; memset(g, 0, sizeof *g); g->zs = zs_; g->no_rulers = nr_; }
 }
 
 /* CPU half of a scene build (no GL calls, so a worker thread may run it); gl_scene_upload() does the rest on the GL thread */
@@ -356,7 +356,7 @@ static void gl_scene_upload(GlScene *g) {
             d->shadow_tex = make_tex(mk, it->w, it->h); free(mk);
         }
     }
-    build_rulers(g);
+    if (!g->no_rulers) build_rulers(g);
 }
 static void gl_scene_build(GlScene *g, const Nb1State *st, const Nb1Roms *roms, const Nb1Table *tab) { gl_scene_cpu(g, st, roms, tab); gl_scene_upload(g); }
 

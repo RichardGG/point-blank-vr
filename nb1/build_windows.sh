@@ -1,0 +1,16 @@
+#!/bin/sh
+# Cross-compile nb1_tool.exe, pbdesk.exe and pbvr.exe for 64-bit Windows with MinGW-w64 (apt install gcc-mingw-w64-x86-64 libopenxr-dev).
+#   SDL2_MINGW = the x86_64-w64-mingw32 folder of SDL2-devel-2.x-mingw.tar.gz      ZLIB_SRC = a zlib source folder built with
+#   make -f win32/Makefile.gcc PREFIX=x86_64-w64-mingw32- libz.a
+# Run the result with SDL2.dll beside it; pbvr also needs openxr_loader.dll from your OpenXR runtime / the OpenXR SDK next to it (or on PATH).
+set -e
+: "${SDL2_MINGW:?set SDL2_MINGW}"; : "${ZLIB_SRC:?set ZLIB_SRC}"; OUT=${OUT:-build-win}; mkdir -p "$OUT"
+CC=${CC:-x86_64-w64-mingw32-gcc}
+SRC="nb1_video.c nb1_scene.c nb1_table.c nb1_edits.c nb1_png.c nb1_json.c"
+CF="-O2 -std=gnu11 -ffp-contract=off -Wall -Wno-missing-field-initializers -Wno-unused-function -Wno-unused-variable -I$ZLIB_SRC -I$SDL2_MINGW/include/SDL2 -I$SDL2_MINGW/include -idirafter /usr/include"
+$CC $CF -o "$OUT/nb1_tool.exe" $SRC nb1_tool.c "$ZLIB_SRC/libz.a" -lm
+for t in desktop/pbdesk:pbdesk vr/pbvr:pbvr; do
+  $CC $CF -o "$OUT/${t#*:}.exe" $SRC "${t%:*}.c" -L"$SDL2_MINGW/lib" -lmingw32 -lSDL2main -lSDL2 -lopengl32 "$ZLIB_SRC/libz.a" -lm
+done
+cp "$SDL2_MINGW/bin/SDL2.dll" "$OUT/"
+ls -l "$OUT"
