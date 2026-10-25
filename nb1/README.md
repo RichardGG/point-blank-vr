@@ -27,3 +27,12 @@ composite vs the oracle and vs MAME's own PNG; sprite entries and tiles; every i
 the arcade-eye view and five orbit views; the aim solver on a fixed ray set; the gun registers over all pixels.
 
 `tests/rules_stress.json` is a synthetic table that touches every supported rule key. It is not a real scene.
+
+## Verification status (what was actually run)
+* Default table, all 197 snapshots: composite == oracle == MAME; entries, items, views, aim, gun registers all match.
+  (An earlier 9 failures were the harness printing floats with 12 digits and a mask field; both fixed and re-run.)
+* `tests/rules_stress.json` and the real corridor, garden and tree tables: every 12th snapshot (17 frames each) match.
+* Mutation check: deliberately breaking the eraser rule, tilt sign, depth slot gap and blanking window each make the test fail
+  (on frames that exercise them: 3200 for tilt, 17450 for the blanking window). Changing the aim tie-break (`<` to `<=`) is NOT
+  caught, because no test scene has two hits at exactly equal distance.
+* Table `edits` are not covered at all (not ported).
