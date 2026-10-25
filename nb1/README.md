@@ -67,6 +67,9 @@ instead of by a library, because the libraries could not be reproduced bit-for-b
   already the right size.
 `tests/make_assets.py` regenerates the synthetic PNGs in `tests/assets/` (no game content).
 
+## Stable table choice and fixed doors
+`nb1_selector_*` wraps the table selection for a stream of frames: the current table is kept while the background art is still the same scene, so a sprite that a rule looks for coming and going no longer flips the whole layering (the hallway walls flickered because of that); it switches to another table after 3 consecutive frames that choose it. `pbdesk` and `pbvr` use it. The four big sprites of the gold doors between stages (tile codes 2289, 2401, 2415, 2528) have a fixed depth rule (2.6 m) in the default table and every draft table, whatever their priority or what else is on screen.
+
 ## Desktop viewer: `pbdesk`
 `make pbdesk` (needs SDL2 and OpenGL 3.3: macOS `brew install sdl2`, Debian/Ubuntu `apt install libsdl2-dev libgl-dev`; the Makefile says so if SDL2 is missing) builds `nb1/pbdesk`, an SDL2 + OpenGL viewer for the live scene:
 one textured quad per item (planes are texture-mapped by projecting through the arcade eye in the fragment shader), an orbit camera, mouse-ray aim

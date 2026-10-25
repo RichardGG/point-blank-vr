@@ -62,6 +62,14 @@ typedef struct Nb1TableSet Nb1TableSet;
 Nb1TableSet *nb1_tableset_load(const char *scene_tables_json);          /* loads every table it names; NULL on error */
 const Nb1Table *nb1_tableset_select(const Nb1TableSet *ts, const Nb1State *st, const Nb1State *sst, const char **name);   /* NULL = none matches */
 void nb1_tableset_free(Nb1TableSet *ts);
+/* Stable table choice for a video stream: nb1_tableset_select() can flip from frame to frame (a sprite that a rule looks for comes and goes), and
+ * a table flipping makes the whole scene's layering jump. The selector keeps the current table while the background art stays the same scene
+ * (similarity to the art when the table last matched >= 0.6), switches to another table after `agree` consecutive frames that choose it, and
+ * drops to "none" only when the art has changed. */
+typedef struct Nb1Selector Nb1Selector;
+Nb1Selector *nb1_selector_new(const Nb1TableSet *ts, int agree);
+const Nb1Table *nb1_selector_update(Nb1Selector *s, const Nb1State *st, const Nb1State *sst, const char **name);
+void nb1_selector_free(Nb1Selector *s);
 /* the captured scene (as numbered in scene_refs.json) whose background art is most like this state; -1 if there are no references */
 int nb1_tableset_nearest_scene(const Nb1TableSet *ts, const Nb1State *st, double *similarity);
 

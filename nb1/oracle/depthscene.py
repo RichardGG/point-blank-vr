@@ -56,8 +56,12 @@ DECAL_EPS = 0.002
 DEFAULT_TABLE = {
     "defaults": {"z_front": 4.0, "z_back": 14.0, "hud_z": 2.0, "slot_gap": 0.0005},
     "rules": [
+        {"match": {"kind": "sprite", "code": [2289, 2289]}, "z": 2.6},         # the four big sprites of the gold doors between stages: a fixed depth
+        {"match": {"kind": "sprite", "code": [2401, 2401]}, "z": 2.6},
+        {"match": {"kind": "sprite", "code": [2415, 2415]}, "z": 2.6},
+        {"match": {"kind": "sprite", "code": [2528, 2528]}, "z": 2.6},
         {"match": {"kind": "tilemap", "layer": [4, 5]}, "hud": True},
-        {"match": {"kind": "sprite", "code": [3799, 3860]}, "hud": True}      # timer digits/ring (3799-3820) and the ammo/heart pill (3857)
+        {"match": {"kind": "sprite", "code": [3799, 3860]}, "hud": True}       # timer digits/ring (3799-3820) and the ammo/heart pill (3857)
     ]
 }
 

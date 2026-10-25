@@ -76,6 +76,7 @@ int main(int argc, char **argv) {
     if (o.table[0] && !tab) { fprintf(stderr, "pbdesk: cannot read table %s (using the default)\n", o.table); }
     Nb1Table *deftab = nb1_table_default();
     Nb1TableSet *tset = (o.tables[0] && !o.table[0]) ? nb1_tableset_load(o.tables) : NULL;     /* an explicit --table wins */
+    Nb1Selector *selr = NULL;                                                                  /* keeps the table choice stable from frame to frame */
     if (o.tables[0] && !o.table[0] && !tset) fprintf(stderr, "pbdesk: cannot read %s (using the default table)\n", o.tables);
     const char *table_name = NULL;
 
@@ -132,7 +133,7 @@ int main(int argc, char **argv) {
                 case SDLK_RIGHTBRACKET: o.vscale *= 1.1; dirty = 1; break;
                 case SDLK_m: o.ruler = (o.ruler + 1) % 3; break;                           /* off / main layers / every depth group */
                 case SDLK_t: o.use_table = !o.use_table; dirty = 1; break;
-                case SDLK_r: if (tset) { Nb1TableSet *nt = nb1_tableset_load(o.tables); if (nt) { nb1_tableset_free(tset); tset = nt; dirty = 1; } else fprintf(stderr, "pbdesk: tables reload failed\n"); }
+                case SDLK_r: if (tset) { Nb1TableSet *nt = nb1_tableset_load(o.tables); if (nt) { nb1_selector_free(selr); selr = NULL; nb1_tableset_free(tset); tset = nt; dirty = 1; } else fprintf(stderr, "pbdesk: tables reload failed\n"); }
                           if (o.table[0]) { Nb1Table *nt = nb1_table_load(o.table); if (nt) { nb1_table_free(tab); tab = nt; dirty = 1; } else fprintf(stderr, "pbdesk: table reload failed\n"); } break;
                 case SDLK_p: o.paused = !o.paused; break;
                 case SDLK_F1: o.show_help = !o.show_help; break;
@@ -172,7 +173,7 @@ int main(int argc, char **argv) {
             Uint64 t0 = SDL_GetPerformanceCounter();
             const Nb1Table *use = deftab; table_name = NULL;
             if (o.use_table && tab) use = tab;
-            else if (o.use_table && tset) { const Nb1Table *sel = nb1_tableset_select(tset, cur, cur, &table_name); if (sel) use = sel; else table_name = NULL; }
+            else if (o.use_table && tset) { if (!selr) selr = nb1_selector_new(tset, 3); const Nb1Table *sel = nb1_selector_update(selr, cur, cur, &table_name); if (sel) use = sel; else table_name = NULL; }
             gl_scene_build(&gs, cur, &roms, use); gs.scene.aim_skip_hud = !o.aim_hud;      /* the gun ray passes through HUD items */
             build_ms = (double)(SDL_GetPerformanceCounter() - t0) * 1000.0 / SDL_GetPerformanceFrequency();
             glBindBuffer(GL_ARRAY_BUFFER, vbo); glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)gs.nverts * sizeof(Vtx), gs.verts, GL_DYNAMIC_DRAW);
@@ -303,7 +304,7 @@ int main(int argc, char **argv) {
         Uint64 now = SDL_GetPerformanceCounter(); (void)t_prev; t_prev = now;
         if (o.shot[0]) SDL_Delay(2);
     }
-    gl_scene_free(&gs); free(cur); nb1_tableset_free(tset); nb1_table_free(tab); nb1_table_free(deftab); nb1_roms_free(&roms);
+    gl_scene_free(&gs); free(cur); nb1_selector_free(selr); nb1_tableset_free(tset); nb1_table_free(tab); nb1_table_free(deftab); nb1_roms_free(&roms);
     SDL_GL_DeleteContext(ctx); SDL_DestroyWindow(win); SDL_Quit();
     return 0;
 }

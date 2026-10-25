@@ -66,10 +66,14 @@ static Nb1Table *table_alloc(void) {
     Nb1Table *t = calloc(1, sizeof *t); t->far = 80; t->z_front = 4; t->z_back = 14; t->hud_z = 2; t->slot_gap = 0.0005;
     t->ndecals = 1; t->decal_lo[0] = 0xee5; t->decal_hi[0] = 0xee7; return t;
 }
+/* the gold doors that open and close between stages are four big sprites; their depth must not depend on what else is on screen */
+static const int DOOR_CODES[4] = { 2289, 2401, 2415, 2528 };
+#define DOOR_Z 2.6
 Nb1Table *nb1_table_default(void) {
-    Nb1Table *t = table_alloc(); t->rules = calloc(2, sizeof(Rule)); t->nrules = 2;
-    Rule *r = &t->rules[0]; r->m.kind = NB1_TILEMAP; r->m.nlayer = 2; r->m.layer[0] = 4; r->m.layer[1] = 5; r->hud = 1;
-    r = &t->rules[1]; r->m.kind = NB1_SPRITE; r->m.has_code = 1; r->m.code_lo = 3799; r->m.code_hi = 3860; r->hud = 1;    /* timer digits/ring and the ammo/heart pill */
+    Nb1Table *t = table_alloc(); t->rules = calloc(6, sizeof(Rule)); t->nrules = 6;
+    for (int i = 0; i < 4; i++) { Rule *r = &t->rules[i]; r->m.kind = NB1_SPRITE; r->m.has_code = 1; r->m.code_lo = r->m.code_hi = DOOR_CODES[i]; r->has_z = 1; r->z = DOOR_Z; }
+    Rule *r = &t->rules[4]; r->m.kind = NB1_TILEMAP; r->m.nlayer = 2; r->m.layer[0] = 4; r->m.layer[1] = 5; r->hud = 1;
+    r = &t->rules[5]; r->m.kind = NB1_SPRITE; r->m.has_code = 1; r->m.code_lo = 3799; r->m.code_hi = 3860; r->hud = 1;    /* timer digits/ring and the ammo/heart pill */
     return t;
 }
 
@@ -290,4 +294,24 @@ int nb1_tableset_nearest_scene(const Nb1TableSet *ts, const Nb1State *st, double
     int nkeys = 0; uint32_t *keys = art_keys(st, &nkeys); int best = -1; double bs = -1;
     for (int q = 0; q < ts->nrefs; q++) { double s = jaccard(keys, nkeys, ts->refs[q].keys, ts->refs[q].n); if (s > bs) { bs = s; best = ts->refs[q].id; } }
     free(keys); if (similarity) *similarity = bs; return best;
+}
+
+struct Nb1Selector { const Nb1TableSet *ts; int agree; const Nb1Table *cur; const char *cur_name; uint32_t *anchor; int nanchor; const Nb1Table *cand; const char *cand_name; int cand_n; };
+Nb1Selector *nb1_selector_new(const Nb1TableSet *ts, int agree) { Nb1Selector *s = calloc(1, sizeof *s); s->ts = ts; s->agree = agree < 1 ? 1 : agree; return s; }
+void nb1_selector_free(Nb1Selector *s) { if (s) { free(s->anchor); free(s); } }
+static void sel_anchor(Nb1Selector *s, const Nb1State *st) { free(s->anchor); s->anchor = art_keys(st, &s->nanchor); }
+const Nb1Table *nb1_selector_update(Nb1Selector *s, const Nb1State *st, const Nb1State *sst, const char **name) {
+    const char *rn = NULL; const Nb1Table *raw = nb1_tableset_select(s->ts, st, sst, &rn);
+    if (raw == s->cur) { if (raw) sel_anchor(s, st); s->cand = NULL; s->cand_n = 0; }
+    else {
+        int same_scene = 0;
+        if (!raw && s->cur) { int n = 0; uint32_t *k = art_keys(st, &n); same_scene = jaccard(k, n, s->anchor, s->nanchor) >= 0.6; free(k); }
+        if (same_scene) { s->cand = NULL; s->cand_n = 0; }                    /* the same background: a rule just stopped matching for a moment */
+        else {
+            if (raw == s->cand && s->cand_n) s->cand_n++; else { s->cand = raw; s->cand_name = rn; s->cand_n = 1; }
+            if (s->cand_n >= s->agree) { s->cur = s->cand; s->cur_name = s->cand_name; s->cand = NULL; s->cand_n = 0; if (s->cur) sel_anchor(s, st); }
+        }
+    }
+    if (name) *name = s->cur ? s->cur_name : NULL;
+    return s->cur;
 }

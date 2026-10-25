@@ -124,8 +124,21 @@ static int select_cmd(int argc, char **argv) {
     nb1_tableset_free(ts); return 0;
 }
 
+/* nb1_tool seltest SCENE_TABLES.json TILE SPR_A SPR_B [TILE2]: feed the selector A x3, B x6 (and then TILE2 with SPR_B x6) and print the choice each time */
+static int seltest_cmd(int argc, char **argv) {
+    Nb1TableSet *ts = nb1_tableset_load(argv[2]); if (!ts) return 1;
+    Nb1State *t1 = nb1_state_load(argv[3]), *a = nb1_state_load(argv[4]), *b = nb1_state_load(argv[5]), *t2 = argc > 6 ? nb1_state_load(argv[6]) : NULL;
+    if (!t1 || !a || !b) return 1;
+    Nb1Selector *sl = nb1_selector_new(ts, 3); const char *nm;
+    for (int i = 0; i < 3; i++) { nb1_selector_update(sl, t1, a, &nm); printf("A%d raw=%s sel=", i, ({ const char *r; nb1_tableset_select(ts, t1, a, &r); r ? r : "-"; })); printf("%s\n", nm ? nm : "-"); }
+    for (int i = 0; i < 6; i++) { nb1_selector_update(sl, t1, b, &nm); printf("B%d raw=%s sel=", i, ({ const char *r; nb1_tableset_select(ts, t1, b, &r); r ? r : "-"; })); printf("%s\n", nm ? nm : "-"); }
+    if (t2) for (int i = 0; i < 6; i++) { nb1_selector_update(sl, t2, b, &nm); printf("C%d raw=%s sel=", i, ({ const char *r; nb1_tableset_select(ts, t2, b, &r); r ? r : "-"; })); printf("%s\n", nm ? nm : "-"); }
+    nb1_selector_free(sl); nb1_tableset_free(ts); return 0;
+}
+
 int main(int argc, char **argv) {
     if (argc >= 4 && !strcmp(argv[1], "select")) return select_cmd(argc, argv);
+    if (argc >= 6 && !strcmp(argv[1], "seltest")) return seltest_cmd(argc, argv);
     if (argc >= 2 && !strcmp(argv[1], "dump")) return dump(argc, argv);
     fprintf(stderr, "usage: nb1_tool dump ROMDIR TILE_STATE SPR_STATE TABLE|- OUTDIR\n"); return 2;
 }

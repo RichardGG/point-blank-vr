@@ -126,7 +126,7 @@ typedef struct {
     SDL_mutex *mu; GlScene back; int ready; unsigned back_frame; const char *back_table; int back_scene; double back_sim;
     volatile int quit, paused, rebuild; volatile double zs; Source src;
     OvEntry *ov; int nov, capov;                       /* the editor's edits, guarded by mu */
-    Nb1State *last; unsigned last_frame; const char *last_name; int last_scene; double last_sim;   /* the state the current scene came from, so an edit can rebuild it */
+    Nb1Selector *selr; const Nb1Table *last_use; Nb1State *last; unsigned last_frame; const char *last_name; int last_scene; double last_sim;   /* the state the current scene came from, so an edit can rebuild it */
 } Worker;
 
 static int worker_main(void *arg) {
@@ -143,7 +143,10 @@ static int worker_main(void *arg) {
         w->rebuild = 0;
         const Nb1Table *use = w->deftab; const char *name = NULL;
         if (w->tab) use = w->tab;
-        else if (w->tset) { const Nb1Table *sel = nb1_tableset_select(w->tset, w->last, w->last, &name); if (sel) use = sel; else name = NULL; }
+        else if (w->selr) {
+            if (st) { const Nb1Table *sel = nb1_selector_update(w->selr, w->last, w->last, &name); w->last_use = sel; w->last_name = name; }     /* only a NEW state moves the selector */
+            if (w->last_use) use = w->last_use; name = w->last_name;
+        }
         w->last_name = name;
         Nb1ScaleSpec specs[64]; int ns = 0;
         SDL_LockMutex(w->mu);
@@ -396,7 +399,7 @@ int main(int argc, char **argv) {
     /* scene worker */
     Worker W; memset(&W, 0, sizeof W); W.o = &o; W.roms = &roms; W.deftab = nb1_table_default(); W.mu = SDL_CreateMutex();
     if (o.table[0]) { W.tab = nb1_table_load(o.table); if (!W.tab) fprintf(stderr, "pbvr: cannot load table %s\n", o.table); }
-    else if (o.tables[0]) { W.tset = nb1_tableset_load(o.tables); if (!W.tset) fprintf(stderr, "pbvr: cannot load tables %s\n", o.tables); }
+    else if (o.tables[0]) { W.tset = nb1_tableset_load(o.tables); if (!W.tset) fprintf(stderr, "pbvr: cannot load tables %s\n", o.tables); else W.selr = nb1_selector_new(W.tset, 3); }
     snprintf(W.src.ipc, sizeof W.src.ipc, "%s", o.ipc);
     double vw_m = o.sdiag * 0.0254 * 0.8 * o.vscale, zs = (NB1_W * o.sdist / vw_m) / NB1_FOCAL; W.zs = zs;
     SDL_Thread *thr = SDL_CreateThreadWithStackSize(worker_main, "scene", 64 << 20, &W);   /* the scene builder keeps big buffers on the stack; Windows threads default to 1 MB */
