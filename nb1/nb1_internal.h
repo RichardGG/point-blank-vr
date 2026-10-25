@@ -57,4 +57,7 @@ int  nb1_png_load(const char *path, int *w, int *h, uint8_t **rgba);            
 void nb1_fill_polygon(const int *xy, int n, int w, int h, uint8_t *mask);          /* ORs the polygon into mask[h][w] */
 void nb1_inpaint(uint8_t *img, const uint8_t *hole, const uint8_t *alpha, int w, int h);   /* img RGB; hole/alpha per pixel */
 int  nb1_apply_edits(Nb1Item *items, int n, int cap, const Nb1Table *tab, uint8_t rgb[0x2000][3]);   /* returns the new item count */
+/* last path separator, '/' or (Windows) '\\' */
+static inline const char *nb1_last_sep(const char *p) { const char *a = strrchr(p, '/'), *b = strrchr(p, '\\'); return a > b ? a : b; }
+static inline int nb1_is_abs(const char *p) { return p[0] == '/' || p[0] == '\\' || (p[0] && p[1] == ':'); }
 #endif

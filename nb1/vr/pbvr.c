@@ -488,6 +488,7 @@ int main(int argc, char **argv) {
             if (getenv("PBVR_DEBUG")) {
                 fprintf(stderr, "  head %.3f %.3f %.3f yaw0 %.3f origin %.3f %.3f %.3f ray_o %.3f %.3f %.3f ray_d %.3f %.3f %.3f raw %.1f %.1f\n", head.position.x, head.position.y, head.position.z, yaw0, origin[0], origin[1], origin[2], ray_o[0], ray_o[1], ray_o[2], ray_d[0], ray_d[1], ray_d[2], dbg_rx, dbg_ry);
             }
+            if (!front.loaded) fprintf(stderr, "pbvr: no game state received yet from %s - is MAME running with pbplay.lua and PB_IPC set to that folder? (the headset stays empty until it is)\n", o.ipc);
             fps_t = t; fps_n = 0;
         }
     }

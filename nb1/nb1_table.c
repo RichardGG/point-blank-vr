@@ -79,7 +79,7 @@ Nb1Table *nb1_table_load(const char *path) {
     char *txt = malloc(n + 1); if (fread(txt, 1, n, f) != (size_t)n) { fclose(f); free(txt); return NULL; } txt[n] = 0; fclose(f);
     Json *j = json_parse(txt); free(txt); if (!j) return NULL;
     Nb1Table *t = table_alloc();
-    const char *slash = strrchr(path, '/'); if (slash) { size_t l = (size_t)(slash - path) + 1; if (l >= sizeof t->base) l = sizeof t->base - 1; memcpy(t->base, path, l); t->base[l] = 0; }
+    const char *slash = nb1_last_sep(path); if (slash) { size_t l = (size_t)(slash - path) + 1; if (l >= sizeof t->base) l = sizeof t->base - 1; memcpy(t->base, path, l); t->base[l] = 0; }
     const Json *d = json_get(j, "defaults");
     if (d) {
         const Json *v;
@@ -176,7 +176,7 @@ Nb1TableSet *nb1_tableset_load(const char *path) {
     fseek(f, 0, SEEK_END); long n = ftell(f); fseek(f, 0, SEEK_SET);
     char *txt = malloc(n + 1); if (fread(txt, 1, n, f) != (size_t)n) { fclose(f); free(txt); return NULL; } txt[n] = 0; fclose(f);
     Json *j = json_parse(txt); free(txt); if (!j || j->t != J_ARR) { json_free(j); return NULL; }
-    char base[512] = ""; const char *slash = strrchr(path, '/'); if (slash) { size_t l = (size_t)(slash - path) + 1; if (l >= sizeof base) l = sizeof base - 1; memcpy(base, path, l); base[l] = 0; }
+    char base[512] = ""; const char *slash = nb1_last_sep(path); if (slash) { size_t l = (size_t)(slash - path) + 1; if (l >= sizeof base) l = sizeof base - 1; memcpy(base, path, l); base[l] = 0; }
     Nb1TableSet *ts = calloc(1, sizeof *ts); ts->nrules = j->n; ts->rules = calloc(j->n ? j->n : 1, sizeof(SetRule));
     for (int i = 0; i < j->n; i++) {
         const Json *rj = j->kid[i], *w = json_get(rj, "when"), *v; SetRule *r = &ts->rules[i];

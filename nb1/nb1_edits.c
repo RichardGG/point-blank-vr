@@ -142,7 +142,7 @@ static void dilate_rect(uint8_t *m, int w, int h, int g) {
 }
 
 static void full_path(const Nb1Table *t, const char *name, char *out, size_t cap) {
-    if (name[0] == '/') snprintf(out, cap, "%s", name); else snprintf(out, cap, "%s%s", t->base, name);
+    if (nb1_is_abs(name)) snprintf(out, cap, "%s", name); else snprintf(out, cap, "%s%s", t->base, name);
 }
 
 /* boolean mask over the item's texture for a split part */
