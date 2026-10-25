@@ -207,6 +207,7 @@ static int apply_decals(Nb1Item *items, int n, int cap, const Nb1Table *tab, dou
         Nb1Item *m = &items[a]; if (!is_decal_code(tab, m)) continue;
         m->decal = 1;
         for (int b = 0; b < n; b++) include[b] = (b != a && items[b].kind != NB1_MASK && items[b].order < m->order && !is_decal_code(tab, &items[b]));
+        for (int k = 0; k < NB1_W * NB1_H; k++) sub[k] = -1;
         tmp.n = n; render_cam(&tmp, &eye, img, sub, include);
         size_t np = (size_t)m->w * m->h; int *own = malloc(np * sizeof *own); int counts[64] = { 0 }, owners[64], no = 0;
         for (int y = 0; y < m->h; y++) for (int x = 0; x < m->w; x++) {
