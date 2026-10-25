@@ -126,6 +126,26 @@ static GLuint program(const char *vs, const char *fs) {
     glDeleteShader(a); glDeleteShader(b); return p;
 }
 
+/* ---------------------------------------------------------------- frozen scene snapshots (research/data/scenes: scenes.json + scene_NNN.z) */
+#include "../nb1_json.h"
+typedef struct { int id; char file[64], family[48], state[48], label[160]; } SceneEnt;
+static SceneEnt *scene_index_load(const char *dir, int *n_out) {
+    char path[1100]; snprintf(path, sizeof path, "%s/scenes.json", dir); FILE *f = fopen(path, "rb"); if (!f) return NULL;
+    fseek(f, 0, SEEK_END); long len = ftell(f); fseek(f, 0, SEEK_SET); char *txt = malloc((size_t)len + 1);
+    if (fread(txt, 1, (size_t)len, f) != (size_t)len) { fclose(f); free(txt); return NULL; } txt[len] = 0; fclose(f);
+    Json *j = json_parse(txt); free(txt); if (!j || j->t != J_ARR) { json_free(j); return NULL; }
+    SceneEnt *e = calloc((size_t)(j->n ? j->n : 1), sizeof *e); *n_out = j->n;
+    for (int i = 0; i < j->n; i++) {
+        const Json *o = j->kid[i], *v; e[i].id = (v = json_get(o, "scene")) ? (int)v->num : i;
+        if ((v = json_get(o, "file")) && v->t == J_STR) snprintf(e[i].file, sizeof e[i].file, "%s", v->str);
+        if ((v = json_get(o, "family")) && v->t == J_STR) snprintf(e[i].family, sizeof e[i].family, "%s", v->str);
+        if ((v = json_get(o, "state")) && v->t == J_STR) snprintf(e[i].state, sizeof e[i].state, "%s", v->str);
+        if ((v = json_get(o, "label")) && v->t == J_STR) snprintf(e[i].label, sizeof e[i].label, "%s", v->str);
+    }
+    json_free(j); return e;
+}
+static Nb1State *scene_state_load(const char *dir, const SceneEnt *e) { char p[1200]; snprintf(p, sizeof p, "%s/%s", dir, e->file); return nb1_state_load_z(p); }
+
 /* ---------------------------------------------------------------- state source */
 typedef struct { char ipc[512]; char file[512]; unsigned last_frame; int have; } Source;
 

@@ -17,7 +17,8 @@
 /* ---------------------------------------------------------------- app */
 typedef struct {
     char roms[512], ipc[512], statefile[512], table[512], tables[512], shot[512];
-    int w, h, mode, hide_hud, use_table, paused, shot_after, show_help, no_text, shot_game_frame, frames_limit, mouse_x, mouse_y, mouse_set, trigger_set, ruler, aim_hud, no_surround;
+    int w, h, mode, hide_hud, use_table, paused, shot_after, show_help, no_text, shot_game_frame, frames_limit, mouse_x, mouse_y, mouse_set, trigger_set, ruler, aim_hud, no_surround, scene_start;
+    char scenes[512];
     double vscale, sdiag, sdist;
     double yaw, pitch, dist, focus, focal;
 } Opts;
@@ -55,7 +56,9 @@ int main(int argc, char **argv) {
         else if (!strcmp(a, "--hide-hud")) o.hide_hud = 1;
         else if (!strcmp(a, "--no-text")) o.no_text = 1;
         else if (!strcmp(a, "--no-ruler")) o.ruler = 0;
-        else if (!strcmp(a, "--no-surround")) o.no_surround = 1;                 /* no world around the play screen */
+        else if (!strcmp(a, "--no-surround")) o.no_surround = 1;
+        else if (!strcmp(a, "--scenes") && v) { snprintf(o.scenes, sizeof o.scenes, "%s", v); i++; }            /* research/data/scenes: frozen snapshots of every scene; Left / Right browse */
+        else if (!strcmp(a, "--scene") && v) { o.scene_start = atoi(v); i++; }                 /* no world around the play screen */
         else if (!strcmp(a, "--aim-hud")) o.aim_hud = 1;                 /* HUD items can be hit by the gun again */
         else if (!strcmp(a, "--viewport-scale") && i + 1 < argc) o.vscale = atof(argv[++i]);
         else if (!strcmp(a, "--screen-diag") && i + 1 < argc) o.sdiag = atof(argv[++i]);
@@ -70,7 +73,7 @@ int main(int argc, char **argv) {
         else die_usage();
     }
     (void)yaw_given;
-    if (!o.roms[0] || (!o.ipc[0] && !o.statefile[0])) die_usage();
+    if (!o.roms[0] || (!o.ipc[0] && !o.statefile[0] && !o.scenes[0])) die_usage();
 
     Nb1Roms roms; if (nb1_roms_load(&roms, o.roms)) { fprintf(stderr, "pbdesk: cannot load ROMs from %s\n", o.roms); return 1; }
     Nb1Table *tab = o.table[0] ? nb1_table_load(o.table) : NULL;
@@ -113,6 +116,12 @@ int main(int argc, char **argv) {
     Source src; memset(&src, 0, sizeof src); snprintf(src.ipc, sizeof src.ipc, "%s", o.ipc); snprintf(src.file, sizeof src.file, "%s", o.statefile);
     GlScene gs; memset(&gs, 0, sizeof gs);
     Nb1State *cur = NULL; unsigned game_frame = 0, shown_frame = 0; int dirty = 0;
+    SceneEnt *scn = NULL; int nscn = 0, scn_idx = 0, scn_go = 0;
+    if (o.scenes[0]) {
+        scn = scene_index_load(o.scenes, &nscn); if (!scn || !nscn) { fprintf(stderr, "pbdesk: no scenes.json in %s\n", o.scenes); return 1; }
+        for (int i = 0; i < nscn; i++) if (scn[i].id == o.scene_start) scn_idx = i;
+        scn_go = 1;
+    }
     int trig = 0, coin = 0, start = 0, seq = 0, running = 1, drag = 0, rendered = 0; int mx = 0, my = 0; double sx = 100, sy = 100;
     char aim_txt[256] = ""; double build_ms = 0;
     if (o.mouse_set) { mx = o.mouse_x; my = o.mouse_y; }
@@ -137,6 +146,8 @@ int main(int argc, char **argv) {
                 case SDLK_r: if (tset) { Nb1TableSet *nt = nb1_tableset_load(o.tables); if (nt) { nb1_selector_free(selr); selr = NULL; nb1_tableset_free(tset); tset = nt; dirty = 1; } else fprintf(stderr, "pbdesk: tables reload failed\n"); }
                           if (o.table[0]) { Nb1Table *nt = nb1_table_load(o.table); if (nt) { nb1_table_free(tab); tab = nt; dirty = 1; } else fprintf(stderr, "pbdesk: table reload failed\n"); } break;
                 case SDLK_p: o.paused = !o.paused; break;
+                case SDLK_RIGHT: if (scn) { scn_idx = (scn_idx + 1) % nscn; scn_go = 1; } break;
+                case SDLK_LEFT: if (scn) { scn_idx = (scn_idx + nscn - 1) % nscn; scn_go = 1; } break;
                 case SDLK_F1: o.show_help = !o.show_help; break;
                 case SDLK_F5: { char fn[64]; snprintf(fn, sizeof fn, "pbdesk_%ld.ppm", (long)time(NULL)); o.shot_after = -1; snprintf(o.shot, sizeof o.shot, "%s", fn); break; }
                 case SDLK_c: coin = 1; break;
@@ -166,7 +177,11 @@ int main(int argc, char **argv) {
         if (keys[SDL_SCANCODE_X]) o.focus += 0.1;
 
         /* new game state? */
-        if (!o.paused) { unsigned fr = 0; Nb1State *ns = poll_state(&src, &fr); if (ns) { free(cur); cur = ns; game_frame = fr; dirty = 1; new_state = 1; } }
+        if (scn && scn_go) {                                              /* load the chosen frozen scene */
+            Nb1State *ns = scene_state_load(o.scenes, &scn[scn_idx]); scn_go = 0;
+            if (ns) { free(cur); cur = ns; game_frame = 0; dirty = 1; new_state = 1; nb1_selector_free(selr); selr = NULL; fprintf(stderr, "pbdesk: scene %d  %s  (%d of %d) %s\n", scn[scn_idx].id, scn[scn_idx].family, scn_idx + 1, nscn, scn[scn_idx].label); }
+        }
+        if (!scn && !o.paused) { unsigned fr = 0; Nb1State *ns = poll_state(&src, &fr); if (ns) { free(cur); cur = ns; game_frame = fr; dirty = 1; new_state = 1; } }
         /* physical viewport: width W at distance D shows the 288 px picture, so one px subtends W/(288 D) and the arcade eye's f = 346 becomes f_eff = 288 D / W */
         const double vw_m = o.sdiag * 0.0254 * 0.8 * o.vscale, feff = NB1_W * o.sdist / vw_m, zs = feff / NB1_FOCAL, fov = 2 * atan(vw_m / (2 * o.sdist)) * 180 / M_PI;
         if (gs.zs != zs) { gs.zs = zs; dirty = 1; }
@@ -174,7 +189,7 @@ int main(int argc, char **argv) {
             Uint64 t0 = SDL_GetPerformanceCounter();
             const Nb1Table *use = deftab; table_name = NULL;
             if (o.use_table && tab) use = tab;
-            else if (o.use_table && tset) { if (!selr) { nb1_tableset_set_roms(tset, &roms); selr = nb1_selector_new(tset, 3); } const Nb1Table *sel = nb1_selector_update(selr, cur, cur, &table_name); if (sel) use = sel; else table_name = NULL; }
+            else if (o.use_table && tset) { if (!selr) { nb1_tableset_set_roms(tset, &roms); selr = nb1_selector_new(tset, scn ? 1 : 3); } const Nb1Table *sel = nb1_selector_update(selr, cur, cur, &table_name); if (sel) use = sel; else table_name = NULL; }
             { static int prev_sc[4][2], moving[4]; if (new_state) for (int L = 0; L < 4; L++) { int sx = cur->ctl[4 * L + 1] & 0x1ff, sy = cur->ctl[4 * L + 3] & 0x1ff;
                 if (sx != prev_sc[L][0] || sy != prev_sc[L][1]) moving[L] = 24; else if (moving[L] > 0) moving[L]--; prev_sc[L][0] = sx; prev_sc[L][1] = sy; gs.scroll_hint[L] = moving[L] > 0; } new_state = 0; }
             gs.surround = !o.no_surround; gl_scene_build(&gs, cur, &roms, use); gs.scene.aim_skip_hud = !o.aim_hud;      /* the gun ray passes through HUD items */

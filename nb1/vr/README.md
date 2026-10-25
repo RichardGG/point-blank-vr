@@ -36,3 +36,10 @@ Keyboard stand-ins on the mirror window: Enter select, G scope, Up/Down scale, P
 Edits are kept per scene (the captured scene whose background art is nearest) and applied by the library as a table's `"scales": [{"match": {...}, "scale": k}]` (depth and plane distance times k, non-HUD items only; all matching entries multiply). Saving appends one line to `pbvr_layer_edits.jsonl` (`--edits-out`): the scene (table name, nearest scene number and similarity, game frame), the viewport settings, and for every edit the layer, its match, the scale, and the depth before and after in authored and real metres, plus a ready-to-paste `table_snippet`. `tools/merge_scales.py pbvr_layer_edits.jsonl --scene N --table T.json` writes the last save of scene N into the table (`--list` shows what was saved).
 
 What "split a sprite from its layer" means here: choosing the sprite-type scope gives that tile code its own scale, separate from the rest of the layer. Sprites are only moved in depth (along the eye's rays), not sideways, and a single sprite instance can't be picked apart from others with the same code.
+
+
+## Jumping between scenes (testing)
+
+`research/data/scenes` in the research repo holds one frozen snapshot per captured scene (121 scenes, 4.5 MiB): the RAM the viewers read, composed like `pbplay.lua` publishes it. `pbvr --scenes DIR [--scene N]` shows them without MAME (unplayable, paused, the editor panels on; left stick click switches those off); **flick either stick sideways** (or press Left / Right on the mirror window) for the previous / next scene. The panel under the picture names the scene number, family and label. Edits you save are filed under that scene number.
+
+`--live` (with `--ipc` and MAME started with `-state_directory <research>\states`) does the same with the playable MAME save states instead: each flick makes MAME load that scene's state (0.264 only) and play on from there. `Play-PC.ps1 -Scenes <path> [-Scene N] [-Live]` starts it all; `pbdesk --scenes DIR --scene N` is the desktop version (Left / Right). Test aids: `PBVR_TOUR=n` visits n scenes and saves a screenshot of each (`PBVR_SHOT=prefix`).

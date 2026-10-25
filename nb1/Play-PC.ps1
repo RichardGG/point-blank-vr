@@ -7,6 +7,9 @@ param(
   [Parameter(Mandatory = $true)][string]$Research,      # the point-blank-research checkout
   [string]$Ipc = "$env:TEMP\pb_ipc",                    # folder shared by MAME and pbvr
   [string]$Pbvr = "",                                   # default: build-win\pbvr.exe next to this script
+  [string]$Scenes = "",                              # research\data\scenes: browse every captured scene (flick a stick sideways / Left, Right keys). Frozen snapshots need no MAME
+  [int]$Scene = 0,                                      # the scene number to start at
+  [switch]$Live,                                        # with -Scenes: MAME jumps to each scene's save state instead (playable)
   [switch]$NoSound,
   [string[]]$PbvrArgs = @()
 )
@@ -22,9 +25,11 @@ $lua = Join-Path $Research 'research\tools\play\pbplay.lua'
 $tables = Join-Path $Research 'research\data\tables\scene_tables.json'
 $mameArgs = @('ptblank', '-rompath', $RomPath, '-video', 'none', '-skip_gameinfo', '-autoboot_script', $lua)
 if ($NoSound) { $mameArgs += @('-sound', 'none') }
+if ($Scenes -and -not $Live) { & $Pbvr --roms $Roms --ipc $Ipc --tables $tables --scenes $Scenes --scene $Scene @PbvrArgs; exit }      # frozen snapshots: no MAME
+if ($Live) { $mameArgs += @('-state_directory', (Join-Path $Research 'states')) }
 $p = Start-Process -FilePath $Mame -ArgumentList $mameArgs -PassThru -WindowStyle Minimized
 try {
-  & $Pbvr --roms $Roms --ipc $Ipc --tables $tables @PbvrArgs
+  if ($Scenes) { & $Pbvr --roms $Roms --ipc $Ipc --tables $tables --scenes $Scenes --scene $Scene --live @PbvrArgs } else { & $Pbvr --roms $Roms --ipc $Ipc --tables $tables @PbvrArgs }
 } finally {
   if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force }
 }

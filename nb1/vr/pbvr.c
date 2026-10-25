@@ -117,7 +117,7 @@ typedef struct { int kind, id, pri, has_key, key; } SelItem;     /* what the poi
 /* ------------------------------------------------------------------ options */
 typedef struct {
     char roms[512], ipc[512], table[512], tables[512];
-    double vscale, sdiag, sdist, gun_pitch, aim_yaw, aim_pitch, jump_dist; int no_vr, gaze, no_surround; char edits_out[512];
+    double vscale, sdiag, sdist, gun_pitch, aim_yaw, aim_pitch, jump_dist; int no_vr, gaze, no_surround, scene_start, live; char edits_out[512], scenes[512];
 } Opts;
 
 /* ------------------------------------------------------------------ scene worker: reads states and builds scenes off the render thread */
@@ -126,7 +126,7 @@ typedef struct {
     SDL_mutex *mu; GlScene back; int ready; unsigned back_frame; const char *back_table; int back_scene; double back_sim;
     volatile int quit, paused, rebuild; volatile double zs; Source src;
     OvEntry *ov; int nov, capov;                       /* the editor's edits, guarded by mu */
-    int prev_scroll[4][2], moving[4]; Nb1Selector *selr; const Nb1Table *last_use; Nb1State *last; unsigned last_frame; const char *last_name; int last_scene; double last_sim;   /* the state the current scene came from, so an edit can rebuild it */
+    int prev_scroll[4][2], moving[4]; SceneEnt *scenes; int nscenes, live; const char *scenes_dir; volatile int goto_idx; Nb1Selector *selr; const Nb1Table *last_use; Nb1State *last; unsigned last_frame; const char *last_name; int last_scene; double last_sim;   /* the state the current scene came from, so an edit can rebuild it */
 } Worker;
 
 static int worker_main(void *arg) {
@@ -134,7 +134,10 @@ static int worker_main(void *arg) {
     while (!w->quit) {
         SDL_LockMutex(w->mu); int busy = w->ready; SDL_UnlockMutex(w->mu);
         if (busy) { SDL_Delay(2); continue; }
-        unsigned fr = 0; Nb1State *st = w->paused ? NULL : poll_state(&w->src, &fr);
+        unsigned fr = 0; Nb1State *st = NULL; int frozen = w->scenes && !w->live, forced_scene = -1;
+        if (frozen) { int gi = w->goto_idx; if (gi >= 0 && gi < w->nscenes) { w->goto_idx = -1; st = scene_state_load(w->scenes_dir, &w->scenes[gi]); forced_scene = w->scenes[gi].id;
+                                         if (w->selr) { nb1_selector_free(w->selr); w->selr = nb1_selector_new(w->tset, 1); } } }       /* a new snapshot: choose its table at once */
+        else if (!w->paused) st = poll_state(&w->src, &fr);
         if (st) {
             for (int L = 0; L < 4; L++) {                                  /* layers whose scroll registers keep changing are scrolling: their world continues the game's own map */
                 int sx = st->ctl[4 * L + 1] & 0x1ff, sy = st->ctl[4 * L + 3] & 0x1ff;
@@ -142,7 +145,7 @@ static int worker_main(void *arg) {
                 w->prev_scroll[L][0] = sx; w->prev_scroll[L][1] = sy; w->back.scroll_hint[L] = w->moving[L] > 0;
             }
             free(w->last); w->last = st; w->last_frame = fr; w->last_name = NULL; w->last_scene = -1; w->last_sim = 0;
-            if (w->tset) w->last_scene = nb1_tableset_nearest_scene(w->tset, st, &w->last_sim);
+            if (forced_scene >= 0) w->last_scene = forced_scene; else if (w->tset) w->last_scene = nb1_tableset_nearest_scene(w->tset, st, &w->last_sim);
         } else if (w->rebuild && w->last) { /* an edit: build the same state again */ }
         else { SDL_Delay(2); continue; }
         w->rebuild = 0;
@@ -370,13 +373,16 @@ int main(int argc, char **argv) {
         else if (!strcmp(a, "--gun-pitch") && v) { o.gun_pitch = atof(v); i++; }
         else if (!strcmp(a, "--no-vr")) o.no_vr = 1;
         else if (!strcmp(a, "--no-surround")) o.no_surround = 1;
+        else if (!strcmp(a, "--scenes") && v) { snprintf(o.scenes, sizeof o.scenes, "%s", v); i++; }             /* the frozen scene snapshots (research/data/scenes) */
+        else if (!strcmp(a, "--scene") && v) { o.scene_start = atoi(v); i++; }
+        else if (!strcmp(a, "--live")) o.live = 1;                                                              /* with --scenes: jump MAME to each scene's save state instead of showing the frozen snapshot */
         else if (!strcmp(a, "--edits-out") && v) { snprintf(o.edits_out, sizeof o.edits_out, "%s", v); i++; }
         else if (!strcmp(a, "--jump-dist") && v) { o.jump_dist = atof(v); i++; }
         else if (!strcmp(a, "--gaze-aim")) o.gaze = 1;                                   /* aim with the head instead of a controller (testing, or no controllers) */
         else if (!strcmp(a, "--aim-offset") && v) { sscanf(v, "%lf,%lf", &o.aim_yaw, &o.aim_pitch); i++; }   /* yaw,pitch degrees added to the aim ray (testing) */
         else { fprintf(stderr, "usage: pbvr --roms DIR --ipc DIR [--tables scene_tables.json | --table T.json] [--screen-diag IN] [--screen-dist M] [--viewport-scale K] [--gun-pitch DEG] [--no-vr]\n"); return 2; }
     }
-    if (!o.roms[0] || !o.ipc[0]) { fprintf(stderr, "pbvr: --roms and --ipc are required\n"); return 2; }
+    if (!o.roms[0] || (!o.ipc[0] && !(o.scenes[0] && !o.live))) { fprintf(stderr, "pbvr: --roms and --ipc are required (--ipc can be left out with --scenes DIR and no --live)\n"); return 2; }
     Nb1Roms roms; if (nb1_roms_load(&roms, o.roms)) { fprintf(stderr, "pbvr: cannot load ROMs from %s\n", o.roms); return 1; }
 
     PFN_xrGetInstanceProcAddr gipa = o.no_vr ? NULL : open_loader();
@@ -410,19 +416,32 @@ int main(int argc, char **argv) {
     else if (o.tables[0]) { W.tset = nb1_tableset_load(o.tables); if (!W.tset) fprintf(stderr, "pbvr: cannot load tables %s\n", o.tables); else { nb1_tableset_set_roms(W.tset, &roms); W.selr = nb1_selector_new(W.tset, 3); } }
     snprintf(W.src.ipc, sizeof W.src.ipc, "%s", o.ipc);
     double vw_m = o.sdiag * 0.0254 * 0.8 * o.vscale, zs = (NB1_W * o.sdist / vw_m) / NB1_FOCAL; W.zs = zs;
+    SceneEnt *scn = NULL; int nscn = 0, scn_idx = 0; char load_name[64] = ""; int load_seq = 0; char scene_desc[260] = "";
+    if (o.scenes[0]) {
+        scn = scene_index_load(o.scenes, &nscn); if (!scn || !nscn) { fprintf(stderr, "pbvr: no scenes.json in %s\n", o.scenes); return 1; }
+        for (int i = 0; i < nscn; i++) if (scn[i].id == o.scene_start) scn_idx = i;
+        W.scenes = scn; W.nscenes = nscn; W.scenes_dir = o.scenes; W.live = o.live; W.goto_idx = -1;
+        if (W.tset) { if (W.selr) nb1_selector_free(W.selr); W.selr = nb1_selector_new(W.tset, o.live ? 3 : 1); }
+        fprintf(stderr, "pbvr: %d scenes from %s (%s)\n", nscn, o.scenes, o.live ? "live: MAME jumps to each save state" : "frozen snapshots, no MAME needed");
+    }
     SDL_Thread *thr = SDL_CreateThreadWithStackSize(worker_main, "scene", 64 << 20, &W);   /* the scene builder keeps big buffers on the stack; Windows threads default to 1 MB */
 
+    if (scn) {
+        snprintf(scene_desc, sizeof scene_desc, "SCENE %d  %s  (%d of %d)%s%s", scn[scn_idx].id, scn[scn_idx].family, scn_idx + 1, nscn, scn[scn_idx].label[0] ? "  " : "", scn[scn_idx].label);
+        if (!o.live) W.goto_idx = scn_idx; else { snprintf(load_name, sizeof load_name, "%s@%d", scn[scn_idx].state, ++load_seq); }
+    }
     GlScene front; memset(&front, 0, sizeof front); front.zs = zs; unsigned shown_frame = 0; const char *table_name = NULL;
     double origin[3] = { 0, 0, 0 }, yaw0 = 0; int need_recenter = 1;
     char aim_path[1100], aim_tmp[1100]; snprintf(aim_path, sizeof aim_path, "%s/aim.txt", o.ipc); snprintf(aim_tmp, sizeof aim_tmp, "%s/aim.tmp", o.ipc);
-    int seq = 0, trig = 0, coin = 0, start = 0, paused = 0, kcoin = 0, kstart = 0, active_hand = 1, prev_trig[2] = { 0, 0 }, prev_pause = 0, prev_rec = 0;
+    int seq = 0, trig = 0, coin = 0, start = 0, paused = (o.scenes[0] && !o.live) ? 1 : 0, kcoin = 0, kstart = 0, active_hand = 1, prev_trig[2] = { 0, 0 }, prev_pause = 0, prev_rec = 0;
     double sx = 144, sy = 112, last_aim_write = 0, fps_t = now_s(); int fps_n = 0; int running = 1;
     int shot_wait = 0;
     /* pause-mode editor state */
     Panel panel, side_l, side_r; memset(&panel, 0, sizeof panel); memset(&side_l, 0, sizeof side_l); memset(&side_r, 0, sizeof side_r);
     int has_sel = 0, scope = 0, cur_scene = -1; double cur_sim = 0; Nb1ScaleSpec sel; SelItem sel_item; memset(&sel, 0, sizeof sel); memset(&sel_item, 0, sizeof sel_item);
     double jump = 0, last_t = now_s(); int prev_sq[2] = { 0, 0 }, prev_ba = 0, prev_bb = 0, prev_bx = 0, prev_by = 0, prev_seltrig = 0;
-    int inj_sel = 0, inj_sq = 0, inj_a = 0, inj_b = 0, inj_x = 0, inj_y = 0, kb_ls = 0, kb_rs = 0, af = 0, shot_req = 0, shot_n = 0; const int autotest = getenv("PBVR_AUTOTEST") != NULL;   /* keyboard / scripted stand-ins for the controller buttons */
+    int inj_sel = 0, inj_sq = 0, inj_a = 0, inj_b = 0, inj_x = 0, inj_y = 0, kb_ls = 0, kb_rs = 0, af = 0, shot_req = 0, shot_n = 0; const int autotest = getenv("PBVR_AUTOTEST") != NULL || getenv("PBVR_TOUR") != NULL, tour = getenv("PBVR_TOUR") != NULL;   /* keyboard / scripted stand-ins for the controller buttons */
+    int nav = 0, prev_flick = 0; float stick_x[2] = { 0, 0 };
     int in_a[2] = { 0, 0 }, in_b[2] = { 0, 0 }, in_sq[2] = { 0, 0 }; float stick[2] = { 0, 0 }; char msg[160] = ""; double msg_until = 0;
 
     while (running) {
@@ -435,6 +454,7 @@ int main(int argc, char **argv) {
                 case SDLK_p: paused = !paused; break; case SDLK_r: need_recenter = 1; break;
                 case SDLK_LEFTBRACKET: o.vscale /= 1.1; break; case SDLK_RIGHTBRACKET: o.vscale *= 1.1; break;
                 case SDLK_RETURN: inj_sel = 1; break; case SDLK_g: inj_sq = 1; break; case SDLK_j: inj_a = 1; break; case SDLK_s: inj_b = 1; break; case SDLK_x: inj_x = 1; break; case SDLK_y: inj_y = 1; break;
+                case SDLK_RIGHT: nav = 1; break; case SDLK_LEFT: nav = -1; break;
                 case SDLK_UP: kb_ls = 1; break; case SDLK_DOWN: kb_ls = -1; break; case SDLK_PAGEUP: kb_rs = 1; break; case SDLK_PAGEDOWN: kb_rs = -1; break;
                 default: break;
             } else if (ev.type == SDL_KEYUP) { if (ev.key.keysym.sym == SDLK_c) kcoin = 0; if (ev.key.keysym.sym == SDLK_v) kstart = 0; if (ev.key.keysym.sym == SDLK_UP || ev.key.keysym.sym == SDLK_DOWN) kb_ls = 0; if (ev.key.keysym.sym == SDLK_PAGEUP || ev.key.keysym.sym == SDLK_PAGEDOWN) kb_rs = 0; }
@@ -468,7 +488,7 @@ int main(int argc, char **argv) {
                 XrActionStateBoolean b = { XR_TYPE_ACTION_STATE_BOOLEAN }; gi.action = xr.a_coin; xrGetActionStateBoolean(xr.sess, &gi, &b); in_a[h] = b.isActive && b.currentState; if (in_a[h]) cn = 1;
                 gi.action = xr.a_start; b = (XrActionStateBoolean){ XR_TYPE_ACTION_STATE_BOOLEAN }; xrGetActionStateBoolean(xr.sess, &gi, &b); in_b[h] = b.isActive && b.currentState; if (in_b[h]) st = 1;
                 f = (XrActionStateFloat){ XR_TYPE_ACTION_STATE_FLOAT }; gi.action = xr.a_squeeze; xrGetActionStateFloat(xr.sess, &gi, &f); in_sq[h] = f.isActive && f.currentState > 0.6f;
-                XrActionStateVector2f v2 = { XR_TYPE_ACTION_STATE_VECTOR2F }; gi.action = xr.a_stick; xrGetActionStateVector2f(xr.sess, &gi, &v2); stick[h] = v2.isActive ? v2.currentState.y : 0;
+                XrActionStateVector2f v2 = { XR_TYPE_ACTION_STATE_VECTOR2F }; gi.action = xr.a_stick; xrGetActionStateVector2f(xr.sess, &gi, &v2); stick[h] = v2.isActive ? v2.currentState.y : 0; stick_x[h] = v2.isActive ? v2.currentState.x : 0;
                 if (trg[h] && !prev_trig[h]) active_hand = h;
             }
             if (trg[active_hand] == 0 && trg[1 - active_hand]) active_hand = 1 - active_hand;
@@ -519,7 +539,8 @@ int main(int argc, char **argv) {
             }
         }
         double t = now_s(), dt = t - last_t; if (dt > 0.1) dt = 0.1; last_t = t;
-        if (autotest) {                                                    /* PBVR_AUTOTEST: a scripted editing session, with screenshots PBVR_SHOT.N.ppm */
+        if (tour) { af++; if (af % 60 == 30) shot_req = 1; if (af % 60 == 0) nav = 1; if (af > 60 * atoi(getenv("PBVR_TOUR")) + 40) { fprintf(stderr, "pbvr: tour finished\n"); running = 0; } }   /* PBVR_TOUR=n: visit n scenes, a screenshot each */
+        if (getenv("PBVR_AUTOTEST")) {                                                    /* PBVR_AUTOTEST: a scripted editing session, with screenshots PBVR_SHOT.N.ppm */
             af++; kb_ls = 0;
             if (af == 150) paused = 1;
             if (af == 190) inj_sel = 1;
@@ -541,6 +562,14 @@ int main(int argc, char **argv) {
             if (af == 490) shot_req = 1;
             if (af == 500) { fprintf(stderr, "pbvr: autotest finished\n"); running = 0; }
         }
+        { float fx = fabsf(stick_x[0]) > fabsf(stick_x[1]) ? stick_x[0] : stick_x[1]; int fl = fx > 0.8f ? 1 : fx < -0.8f ? -1 : 0;      /* flick a stick sideways: next / previous scene */
+          if (fl && !prev_flick) nav = fl; prev_flick = fl; }
+        if (nav && scn) {
+            scn_idx = ((scn_idx + nav) % nscn + nscn) % nscn; nav = 0;
+            snprintf(scene_desc, sizeof scene_desc, "SCENE %d  %s  (%d of %d)%s%s", scn[scn_idx].id, scn[scn_idx].family, scn_idx + 1, nscn, scn[scn_idx].label[0] ? "  " : "", scn[scn_idx].label);
+            if (!o.live) W.goto_idx = scn_idx; else snprintf(load_name, sizeof load_name, "%s@%d", scn[scn_idx].state, ++load_seq);
+            snprintf(msg, sizeof msg, "%s", scene_desc); msg_until = now_s() + 3; has_sel = 0; jump = 0;
+        } else nav = 0;
         /* ---- pause-mode editing */
         if (!paused) jump = 0;
         else if (!o.no_vr) {
@@ -580,8 +609,8 @@ int main(int argc, char **argv) {
             if (changed) W.rebuild = 1;
         }
         inj_sel = inj_sq = inj_a = inj_b = inj_x = inj_y = 0; prev_seltrig = trg[active_hand]; prev_sq[0] = in_sq[0]; prev_sq[1] = in_sq[1]; prev_ba = in_a[1]; prev_bb = in_b[1]; prev_bx = in_a[0]; prev_by = in_b[0];
-        if (t - last_aim_write > 1.0 / 120) {
-            FILE *f = fopen(aim_tmp, "w"); if (f) { fprintf(f, "%d %.2f %.2f %d %d %d %d\n", ++seq, sx, sy, trig, coin, start, paused); fclose(f); replace_file(aim_tmp, aim_path); }
+        if (o.ipc[0] && t - last_aim_write > 1.0 / 120) {
+            FILE *f = fopen(aim_tmp, "w"); if (f) { fprintf(f, "%d %.2f %.2f %d %d %d %d%s%s\n", ++seq, sx, sy, trig, coin, start, paused, load_name[0] ? " " : "", load_name); fclose(f); replace_file(aim_tmp, aim_path); }
             last_aim_write = t;
         }
 
@@ -589,12 +618,12 @@ int main(int argc, char **argv) {
         if (paused) {
             char l[200]; double zm = 0; int ni = has_sel ? group_z(&front, &sel, &zm) : 0; double kk = 1;
             if (has_sel) { SDL_LockMutex(W.mu); const OvEntry *e = ov_find(W.ov, W.nov, cur_scene, &sel); if (e) kk = e->s.k; SDL_UnlockMutex(W.mu); }
-            snprintf(l, sizeof l, "PAUSED   scene #%d (%.0f%% art match)   table: %s   frame %u", cur_scene, cur_sim * 100, table_name ? table_name : "default", shown_frame); panel_set(&panel, 0, l);
+            if (scn) snprintf(l, sizeof l, "%s   %s   table: %s", scn && !o.live ? "FROZEN" : "PAUSED", scene_desc, table_name ? table_name : "default"); else snprintf(l, sizeof l, "PAUSED   scene #%d (%.0f%% art match)   table: %s   frame %u", cur_scene, cur_sim * 100, table_name ? table_name : "default", shown_frame); panel_set(&panel, 0, l);
             if (has_sel && ni) { char d[80]; spec_desc(&sel, d, sizeof d); snprintf(l, sizeof l, "SELECTED: %s (%s, %d item%s)   depth %.1f m   scale x%.2f", d, scope ? "this sprite type" : "whole layer", ni, ni == 1 ? "" : "s", zm * zs, kk); }
             else snprintf(l, sizeof l, "Point at a layer and pull the trigger to select it");
             panel_set(&panel, 1, l);
             snprintf(l, sizeof l, "viewport x%.2f = %.2f m wide at %.2f m, depth x%.2f     %s", o.vscale, vw_m, o.sdist, zs, jump != 0 ? "JUMPED to the layer (real size)" : "at the playing area"); panel_set(&panel, 2, l);
-            panel_set(&panel, 3, t < msg_until ? msg : "");
+            panel_set(&panel, 3, t < msg_until ? msg : (scn ? "stick left / right: previous / next scene" : ""));
             /* controls on the left (turn your head left), this scene's edits on the right */
             static const char *help[] = { "CONTROLS (paused)", "", "trigger          select a layer", "grip             layer / sprite type", "left stick       scale the layer", "                 (up = farther, bigger)",
                                           "right stick      viewport size", "A                jump to layer / back", "B                save the edits", "X                reset selected", "Y                reset all of this scene", "left stick click resume the game" };
@@ -610,6 +639,8 @@ int main(int argc, char **argv) {
             if (row == 2) panel_set(&side_r, row++, "(none yet)");
             { const char *s1 = strrchr(o.edits_out, '/'), *s2 = strrchr(o.edits_out, '\\'), *bn = s1 > s2 ? s1 : s2; snprintf(r, sizeof r, "B saves to %.150s", bn ? bn + 1 : o.edits_out); } panel_set(&side_r, row++, ""); panel_set(&side_r, row++, r);
             while (row < PANEL_LINES) panel_set(&side_r, row++, "");
+        } else if (t < msg_until) {                                           /* a short note while playing: the scene just jumped to */
+            panel_set(&panel, 0, scn ? scene_desc : ""); panel_set(&panel, 1, ""); panel_set(&panel, 2, ""); panel_set(&panel, 3, msg);
         }
         /* render */
         if (!o.no_vr) {
@@ -623,9 +654,9 @@ int main(int argc, char **argv) {
                     glViewport(0, 0, E->w, E->h); if (front.loaded && front.scene.has_clear) glClearColor((float)(front.scene.clear[0] / 255.0), (float)(front.scene.clear[1] / 255.0), (float)(front.scene.clear[2] / 255.0), 1); else glClearColor(0.02f, 0.02f, 0.03f, 1); glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
                     M4 mvp = m4_mul(proj[e], view[e]);
                     if (front.loaded) draw_scene(&gfx, &front, &mvp);
-                    if (paused) {
+                    if (paused || t < msg_until) {
                         M4 pv_ = m4_mul(proj[e], m4_rigid_inverse(m4_from_pose(xr.views[e].pose))); M4 s2p = m4_mul(m4_yaw_pos(yaw0, origin), m4_mul(m4_trans(0, 0, jump), m4_scale_z(zs)));
-                        if (has_sel && front.loaded) for (int i = 0; i < front.scene.n; i++) {          /* outline every item of the selected group */
+                        if (paused && has_sel && front.loaded) for (int i = 0; i < front.scene.n; i++) {          /* outline every item of the selected group */
                             const Nb1Item *it = &front.scene.items[i]; if (!spec_matches(&sel, it)) continue;
                             double Pq[16][3]; int mm = item_polygon(it, front.scene.far, Pq); if (mm < 3) continue;
                             float seg[96]; int nv = 0;
@@ -633,8 +664,8 @@ int main(int argc, char **argv) {
                             draw_lines(&gfx, &pv_, seg, nv, 1.0f, 0.85f, 0.1f);
                         }
                         panel_draw(&gfx, &panel, &pv_, m4_yaw_pos(yaw0, origin), o.sdist, -(vw_m * 224.0 / 288.0) / 2 - 0.02, vw_m / 480.0, 0);
-                        panel_draw(&gfx, &side_l, &pv_, m4_yaw_pos(yaw0 + 0.95, origin), 1.0, 0.16, 0.0013, 1);       /* turn left: the controls */
-                        panel_draw(&gfx, &side_r, &pv_, m4_yaw_pos(yaw0 - 0.95, origin), 1.0, 0.16, 0.0013, 1);       /* turn right: this scene's edits */
+                        if (paused) panel_draw(&gfx, &side_l, &pv_, m4_yaw_pos(yaw0 + 0.95, origin), 1.0, 0.16, 0.0013, 1);       /* turn left: the controls */
+                        if (paused) panel_draw(&gfx, &side_r, &pv_, m4_yaw_pos(yaw0 - 0.95, origin), 1.0, 0.16, 0.0013, 1);       /* turn right: this scene's edits */
                     }
                     if (have_ray) {                                                   /* laser and a small cross where it lands (physical coordinates) */
                         M4 pv_ = m4_mul(proj[e], m4_rigid_inverse(m4_from_pose(xr.views[e].pose)));

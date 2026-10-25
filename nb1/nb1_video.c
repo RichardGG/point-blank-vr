@@ -95,6 +95,15 @@ Nb1State *nb1_state_from_bytes(const uint8_t *b, size_t len) {
     memcpy(s->pal, b, 0x8000);
     return s;
 }
+/* a zlib-compressed raw state (the frozen scene snapshots of the research repo) */
+Nb1State *nb1_state_load_z(const char *path) {
+    FILE *f = fopen(path, "rb"); if (!f) return NULL;
+    fseek(f, 0, SEEK_END); long n = ftell(f); fseek(f, 0, SEEK_SET); if (n <= 0) { fclose(f); return NULL; }
+    uint8_t *z = malloc((size_t)n); if (fread(z, 1, (size_t)n, f) != (size_t)n) { fclose(f); free(z); return NULL; } fclose(f);
+    uint8_t *buf = malloc(NB1_STATE_BYTES); uLongf len = NB1_STATE_BYTES; Nb1State *s = NULL;
+    if (uncompress(buf, &len, z, (uLong)n) == Z_OK) s = nb1_state_from_bytes(buf, len);
+    free(buf); free(z); return s;
+}
 Nb1State *nb1_state_load(const char *path) {
     FILE *f = fopen(path, "rb"); if (!f) return NULL;
     uint8_t *buf = malloc(NB1_STATE_BYTES); size_t n = fread(buf, 1, NB1_STATE_BYTES, f); fclose(f);
