@@ -136,16 +136,10 @@ static void assign_depths(Nb1Item *items, int n, const Nb1Table *tab) {
         }
     }
     for (int a = 0; a < n; a++) if (items[a].hud) { items[a].z = tab->hud_z; explicit_[a] = 1; }
-    /* rank the (priority, kind) slots of the untagged items back to front */
-    int slot_of[16 * 2]; for (int i = 0; i < 32; i++) slot_of[i] = 0;
-    int present[32] = { 0 };
-    for (int a = 0; a < n; a++) if (!explicit_[a]) present[items[a].pri * 2 + (items[a].kind == NB1_TILEMAP ? 0 : 1)] = 1;
-    int ns = 0; for (int i = 0; i < 32; i++) if (present[i]) slot_of[i] = ns++;
-    double nn = ns - 1 > 1 ? ns - 1 : 1;
-    for (int a = 0; a < n; a++) if (!explicit_[a]) {
-        int i = slot_of[items[a].pri * 2 + (items[a].kind == NB1_TILEMAP ? 0 : 1)];
-        items[a].z = tab->z_back - (tab->z_back - tab->z_front) * i / nn;
-    }
+    /* a FIXED slot per (priority, kind): an untagged layer's depth never depends on which other slots exist */
+    double step = (tab->z_back - tab->z_front) / 15.0;
+    for (int a = 0; a < n; a++) if (!explicit_[a])
+        items[a].z = tab->z_back - step * (items[a].pri * 2 + (items[a].kind == NB1_TILEMAP ? 0 : 1));
     for (int a = 0; a < n; a++) {
         Nb1Item *it = &items[a];
         if (it->has_plane) {

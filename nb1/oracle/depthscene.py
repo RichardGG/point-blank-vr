@@ -95,13 +95,12 @@ def assign_depths(items, table=DEFAULT_TABLE):
     # HUD art stays on one flat plane at the arcade-screen distance
     for it in items:
         if it.hud: it.z = d['hud_z']; explicit.add(id(it))
-    # everything else without an explicit depth: rank the (priority, kind) slots back-to-front
-    auto = [it for it in items if id(it) not in explicit]
-    slots = sorted(set((it.pri, 0 if it.kind == 'tilemap' else 1) for it in auto))
-    n = max(len(slots) - 1, 1)
-    for it in auto:
-        i = slots.index((it.pri, 0 if it.kind == 'tilemap' else 1))
-        it.z = d['z_back'] - (d['z_back'] - d['z_front']) * i / n
+    # everything else without an explicit depth: a FIXED slot per (priority, kind), so the depth of an untagged layer
+    # never changes when another slot appears or disappears (16 slots: pri 0..7 x tilemap/sprite, back to front)
+    step = (d['z_back'] - d['z_front']) / 15.0
+    for it in items:
+        if id(it) not in explicit:
+            it.z = d['z_back'] - step * (it.pri * 2 + (0 if it.kind == 'tilemap' else 1))
     # strict ordering inside a depth plane: later-drawn is closer (the arcade's last-wins rule)
     for it in items:
         if it.plane is not None:                     # a projected plane's depth = where the arcade eye's centre ray meets it
