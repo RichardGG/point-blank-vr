@@ -176,33 +176,64 @@ static int is_decal_code(const Nb1Table *tab, const Nb1Item *it) {
     for (int k = 0; k < tab->ndecals; k++) if (tab->decal_lo[k] <= it->key && it->key <= tab->decal_hi[k]) return 1;
     return 0;
 }
-static void apply_decals(Nb1Item *items, int n, const Nb1Table *tab) {
-    for (int a = 0; a < n; a++) {
+static void prepare(Nb1Item *it);
+static void render_cam(const Nb1Scene *s, const Nb1Cam *c, uint8_t *rgb, int32_t *ids, const uint8_t *include);
+
+/* Give decal piece m the plane / tilt / depth of the surface `owner` it lies on. */
+static void place_decal(Nb1Item *m, const Nb1Item *owner) {
+    m->hud = owner->hud; m->tilt_x = owner->tilt_x; m->tilt_y = owner->tilt_y; m->has_plane = owner->has_plane;
+    memcpy(m->pn, owner->pn, sizeof m->pn); m->pd = owner->pd;
+    double ray[3]; unproject(m->x0 + m->w / 2.0, m->y0 + m->h / 2.0, 1.0, ray);
+    if (owner->hud) m->z = owner->z - DECAL_EPS;
+    else if (owner->has_plane) {
+        double den = dot(ray, owner->pn);
+        m->z = (fabs(den) > 1e-9 && owner->pd / den > 0) ? -(ray[2] * (owner->pd / den)) - DECAL_EPS : owner->z - DECAL_EPS;
+    } else {
+        double ctr[3], r[3], u[3], nn[3]; item_corners(owner, ctr, r, u); cross(r, u, nn);
+        double den = dot(ray, nn), t = fabs(den) > 1e-12 ? dot(ctr, nn) / den : -1.0;
+        m->z = (t > 0 ? t : owner->z) - DECAL_EPS;
+    }
+}
+
+/* Each decal pixel belongs to the surface the arcade eye sees there among the items drawn BEFORE the decal. A decal that straddles
+ * surfaces is split into one piece per surface (largest first; the first piece replaces the decal in place, the rest are appended).
+ * Returns the new item count; the array must have room for `cap` items. */
+static int apply_decals(Nb1Item *items, int n, int cap, const Nb1Table *tab, double far, uint8_t rgb[0x2000][3]) {
+    int n0 = n;
+    Nb1Scene tmp = { items, n, far, { { 0 } } }; memcpy(tmp.rgb, rgb, sizeof tmp.rgb);
+    Nb1Cam eye; nb1_arcade_camera(&eye, 1);
+    uint8_t *include = malloc(cap), *img = malloc(NB1_W * NB1_H * 3); int32_t *sub = malloc(NB1_W * NB1_H * 4);
+    for (int a = 0; a < n0; a++) {
         Nb1Item *m = &items[a]; if (!is_decal_code(tab, m)) continue;
         m->decal = 1;
-        int cx = (int)floor(m->x0 + m->w / 2.0), cy = (int)floor(m->y0 + m->h / 2.0);
-        if (!(cx >= 0 && cx < NB1_W && cy >= 0 && cy < NB1_H)) continue;
-        Nb1Item *owner = NULL;
-        for (int b = 0; b < n; b++) {
-            Nb1Item *o = &items[b];
-            if (b == a || o->kind == NB1_MASK || o->order >= m->order || is_decal_code(tab, o)) continue;
-            int ox = cx - o->x0, oy = cy - o->y0;
-            if (ox >= 0 && ox < o->w && oy >= 0 && oy < o->h && o->pen[(size_t)oy * o->w + ox] >= 0 && (!owner || o->order > owner->order)) owner = o;
+        for (int b = 0; b < n; b++) include[b] = (b != a && items[b].kind != NB1_MASK && items[b].order < m->order && !is_decal_code(tab, &items[b]));
+        tmp.n = n; render_cam(&tmp, &eye, img, sub, include);
+        size_t np = (size_t)m->w * m->h; int *own = malloc(np * sizeof *own); int counts[64] = { 0 }, owners[64], no = 0;
+        for (int y = 0; y < m->h; y++) for (int x = 0; x < m->w; x++) {
+            int X = m->x0 + x, Y = m->y0 + y, o = (X >= 0 && X < NB1_W && Y >= 0 && Y < NB1_H) ? sub[Y * NB1_W + X] : -1;
+            own[(size_t)y * m->w + x] = o;
+            if (o >= 0 && m->tex[((size_t)y * m->w + x) * 4 + 3]) { int k = 0; while (k < no && owners[k] != o) k++; if (k == no && no < 64) owners[no++] = o; if (k < no) counts[k]++; }
         }
-        if (!owner) continue;
-        m->hud = owner->hud; m->tilt_x = owner->tilt_x; m->tilt_y = owner->tilt_y; m->has_plane = owner->has_plane;
-        memcpy(m->pn, owner->pn, sizeof m->pn); m->pd = owner->pd;
-        double ray[3]; unproject(m->x0 + m->w / 2.0, m->y0 + m->h / 2.0, 1.0, ray);
-        if (owner->hud) m->z = owner->z - DECAL_EPS;
-        else if (owner->has_plane) {
-            double den = dot(ray, owner->pn);
-            m->z = (fabs(den) > 1e-9 && owner->pd / den > 0) ? -(ray[2] * (owner->pd / den)) - DECAL_EPS : owner->z - DECAL_EPS;
-        } else {
-            double ctr[3], r[3], u[3], nn[3]; item_corners(owner, ctr, r, u); cross(r, u, nn);
-            double den = dot(ray, nn), t = fabs(den) > 1e-12 ? dot(ctr, nn) / den : -1.0;
-            m->z = (t > 0 ? t : owner->z) - DECAL_EPS;
+        for (int i = 1; i < no; i++) { int ov = owners[i], cv = counts[i], j = i - 1;      /* count desc, then index asc */
+            while (j >= 0 && (counts[j] < cv || (counts[j] == cv && owners[j] > ov))) { owners[j + 1] = owners[j]; counts[j + 1] = counts[j]; j--; } owners[j + 1] = ov; counts[j + 1] = cv; }
+        if (no) {
+            uint8_t *orig_tex = malloc(np * 4); int32_t *orig_pen = malloc(np * 4); memcpy(orig_tex, m->tex, np * 4); memcpy(orig_pen, m->pen, np * 4);
+            Nb1Item base = *m;
+            for (int k = 0; k < no; k++) {
+                Nb1Item *piece = m;
+                if (k) { if (n >= cap) break; piece = &items[n++]; *piece = base; piece->tex = malloc(np * 4); piece->pen = malloc(np * 4); }
+                for (size_t q = 0; q < np; q++) {
+                    int sel = orig_tex[q * 4 + 3] && (own[q] == owners[k] || (k == 0 && own[q] < 0));
+                    for (int ch = 0; ch < 4; ch++) piece->tex[q * 4 + ch] = sel ? orig_tex[q * 4 + ch] : (ch < 3 ? orig_tex[q * 4 + ch] : 0);
+                    piece->pen[q] = sel ? orig_pen[q] : -1;
+                }
+                piece->decal = 1; place_decal(piece, &items[owners[k]]); prepare(piece);
+            }
+            free(orig_tex); free(orig_pen);
         }
+        free(own);
     }
+    free(include); free(img); free(sub); return n;
 }
 
 /* ---------------------------------------------------------------- erasers */
@@ -248,7 +279,7 @@ int nb1_build_scene(const Nb1State *st, const Nb1State *sst, const Nb1Roms *roms
     Nb1Table *own = NULL; if (!tab) tab = own = nb1_table_default();
     out->far = tab->far;
     nb1_palette_rgb(st, out->rgb);
-    int cap = 6 * 8 + 256 + 1; Nb1Item *items = calloc(cap, sizeof *items); int n = 0, order = 0;
+    int cap = 6 * 8 + 256 + 1 + 64; Nb1Item *items = calloc(cap, sizeof *items); int n = 0, order = 0;
     Nb1Entry *ents = malloc(256 * sizeof *ents); int ne = nb1_sprite_entries(sst, ents);
     for (int p = 0; p < 8; p++) {
         for (int i = 0; i < 6; i++) {
@@ -282,7 +313,8 @@ int nb1_build_scene(const Nb1State *st, const Nb1State *sst, const Nb1Roms *roms
     wy0 = ((cr[2] & 0x8000) ? (cr[2] - 65536) : cr[2]) - 0x21; if (wy0 < 0) wy0 = 0;
     wy1 = ((cr[3] & 0x8000) ? (cr[3] - 65536) : cr[3]) - 0x21 - 1; if (wy1 > NB1_H - 1) wy1 = NB1_H - 1;
     assign_depths(items, n, tab);
-    apply_decals(items, n, tab);
+    for (int a = 0; a < n; a++) prepare(&items[a]);
+    n = apply_decals(items, n, cap - 1, tab, out->far, out->rgb);
     if (wx0 != 0 || wy0 != 0 || wx1 != NB1_W - 1 || wy1 != NB1_H - 1) {
         Nb1Item *it = &items[n]; it->kind = NB1_MASK; it->id = -1; it->pri = 8; it->order = 1000000; it->w = NB1_W; it->h = NB1_H;
         it->tex = calloc(NB1_W * NB1_H, 4); it->pen = malloc(NB1_W * NB1_H * 4); it->rule = -1; it->hud = 1; it->ncols = 36; it->nrows = 28;
@@ -390,21 +422,21 @@ static void draw_item(const Nb1Scene *s, int item_index, const Nb1Item *it, cons
         else if (p == -3) { pen[k] = -1; col[k * 3] = col[k * 3 + 1] = col[k * 3 + 2] = 0; zb[k] = t; if (ids) ids[k] = -1; }
     }
 }
-static void render_cam(const Nb1Scene *s, const Nb1Cam *c, uint8_t *rgb, int32_t *ids) {
+static void render_cam(const Nb1Scene *s, const Nb1Cam *c, uint8_t *rgb, int32_t *ids, const uint8_t *include) {
     size_t N = (size_t)c->w * c->h; int32_t *pen = malloc(N * 4); double *zb = malloc(N * sizeof *zb);
     for (size_t k = 0; k < N; k++) { pen[k] = -1; zb[k] = INFINITY; }
     memset(rgb, 0, N * 3);
     int *ord = malloc(s->n * sizeof *ord); for (int i = 0; i < s->n; i++) ord[i] = i;
     for (int i = 1; i < s->n; i++) { int v = ord[i], j = i - 1; while (j >= 0 && s->items[ord[j]].order > s->items[v].order) { ord[j + 1] = ord[j]; j--; } ord[j + 1] = v; }
-    for (int i = 0; i < s->n; i++) draw_item(s, ord[i], &s->items[ord[i]], c, 0, pen, rgb, zb, ids);
-    for (int i = 0; i < s->n; i++) if (s->items[ord[i]].shadow) draw_item(s, ord[i], &s->items[ord[i]], c, 1, pen, rgb, zb, NULL);
+    for (int i = 0; i < s->n; i++) if (!include || include[ord[i]]) draw_item(s, ord[i], &s->items[ord[i]], c, 0, pen, rgb, zb, ids);
+    for (int i = 0; i < s->n; i++) if (s->items[ord[i]].shadow && (!include || include[ord[i]])) draw_item(s, ord[i], &s->items[ord[i]], c, 1, pen, rgb, zb, NULL);
     free(ord); free(pen); free(zb);
 }
-void nb1_render_cam(const Nb1Scene *s, const Nb1Cam *c, uint8_t *rgb) { render_cam(s, c, rgb, NULL); }
+void nb1_render_cam(const Nb1Scene *s, const Nb1Cam *c, uint8_t *rgb) { render_cam(s, c, rgb, NULL, NULL); }
 void nb1_visible_map(const Nb1Scene *s, int32_t *ids) {
     Nb1Cam c; nb1_arcade_camera(&c, 1);
     for (int k = 0; k < NB1_W * NB1_H; k++) ids[k] = -1;
-    uint8_t *rgb = malloc(NB1_W * NB1_H * 3); render_cam(s, &c, rgb, ids); free(rgb);
+    uint8_t *rgb = malloc(NB1_W * NB1_H * 3); render_cam(s, &c, rgb, ids, NULL); free(rgb);
 }
 
 /* ---------------------------------------------------------------- aim */

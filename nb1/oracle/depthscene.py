@@ -142,24 +142,24 @@ def _place_decal(m, owner):
         m.z = (t if t > 0 else owner.z) - DECAL_EPS
 
 def apply_decals(items, table=DEFAULT_TABLE):
-    """Each decal pixel belongs to what the arcade drew it over there (the latest-drawn opaque non-decal item below it).  A decal
-    that straddles two surfaces is split into one piece per surface, each lying on its own, so the arcade-eye picture stays exact.
+    """Each decal pixel belongs to the surface the arcade eye sees there among the items drawn before the decal.  A decal that
+    straddles two surfaces is split into one piece per surface, each lying on its own, so the arcade-eye picture stays exact.
     The first (largest) piece replaces the decal in place; the others are appended."""
     ranges = table.get('decals', DEFAULT_DECALS)
     extra = []
     for m in list(items):
         if not _is_decal_code(m, ranges): continue
         m.decal = True
-        own = np.full((m.h, m.w), -1, np.int32); best = np.full((m.h, m.w), -1, np.int64); bestz = np.full((m.h, m.w), np.inf)
-        mine = m.tex[..., 3] > 0
-        for n, o in enumerate(items):
-            if o is m or o.kind == 'mask' or o.order >= m.order or _is_decal_code(o, ranges): continue
-            x0, y0 = max(m.x0, o.x0, 0), max(m.y0, o.y0, 0)
-            x1, y1 = min(m.x0 + m.w, o.x0 + o.w, W), min(m.y0 + m.h, o.y0 + o.h, H)
-            if x1 <= x0 or y1 <= y0: continue
-            ms = (slice(y0 - m.y0, y1 - m.y0), slice(x0 - m.x0, x1 - m.x0)); os_ = (slice(y0 - o.y0, y1 - o.y0), slice(x0 - o.x0, x1 - o.x0))
-            upd = mine[ms] & (o.tex[os_][..., 3] > 0) & ((o.order > best[ms]) | ((o.order == best[ms]) & (o.z < bestz[ms])))   # same order (split pieces): the nearer wins
-            own[ms][upd] = n; best[ms][upd] = o.order; bestz[ms][upd] = o.z
+        # the surface under each decal pixel = what the arcade eye sees there among the items drawn BEFORE the decal
+        # (the z-buffer decides, so a depth table that puts an earlier item in front of a later one is respected)
+        under = [n for n, o in enumerate(items) if o is not m and o.kind != 'mask' and o.order < m.order and not _is_decal_code(o, ranges)]
+        sub = np.full((H, W), -1, np.int32)
+        render_cam([items[n] for n in under], (0, 0, 0), np.array([0, 0, -1.0]), np.array([1.0, 0, 0]), np.array([0, 1.0, 0]), FOCAL, (W, H), ids=sub) if under else None
+        own = np.full((m.h, m.w), -1, np.int32); mine = m.tex[..., 3] > 0
+        x0, y0, x1, y1 = max(m.x0, 0), max(m.y0, 0), min(m.x0 + m.w, W), min(m.y0 + m.h, H)
+        if x1 > x0 and y1 > y0:
+            blk = sub[y0:y1, x0:x1]; mapped = np.where(blk >= 0, np.array(under + [-1])[np.where(blk >= 0, blk, len(under))], -1)
+            own[y0 - m.y0:y1 - m.y0, x0 - m.x0:x1 - m.x0] = mapped
         owners = sorted({int(v) for v in own[mine & (own >= 0)]}, key=lambda n: (-int((own[mine] == n).sum()), n))
         if not owners: continue
         orig_tex, orig_pen = m.tex.copy(), m.pen.copy()
