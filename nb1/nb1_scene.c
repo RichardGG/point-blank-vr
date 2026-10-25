@@ -246,7 +246,7 @@ int nb1_build_scene(const Nb1State *st, const Nb1State *sst, const Nb1Roms *roms
     assign_depths(items, n, tab);
     if (wx0 != 0 || wy0 != 0 || wx1 != NB1_W - 1 || wy1 != NB1_H - 1) {
         Nb1Item *it = &items[n]; it->kind = NB1_MASK; it->id = -1; it->pri = 8; it->order = 1000000; it->w = NB1_W; it->h = NB1_H;
-        it->tex = calloc(NB1_W * NB1_H, 4); it->pen = malloc(NB1_W * NB1_H * 4); it->rule = -1; it->hud = 1;
+        it->tex = calloc(NB1_W * NB1_H, 4); it->pen = malloc(NB1_W * NB1_H * 4); it->rule = -1; it->hud = 1; it->ncols = 36; it->nrows = 28;
         for (int y = 0; y < NB1_H; y++) for (int x = 0; x < NB1_W; x++) {
             int inside = x >= wx0 && x <= wx1 && y >= wy0 && y <= wy1;
             it->pen[y * NB1_W + x] = inside ? -1 : -3; it->tex[(y * NB1_W + x) * 4 + 3] = inside ? 0 : 255;
