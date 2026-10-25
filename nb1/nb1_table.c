@@ -112,6 +112,11 @@ Nb1Table *nb1_table_load(const char *path) {
             }
         }
     }
+    const Json *sj = json_get(j, "scales");
+    if (sj && sj->t == J_ARR) {
+        t->scales = calloc(sj->n ? sj->n : 1, sizeof(Scale)); t->nscales = sj->n;
+        for (int i = 0; i < sj->n; i++) { const Json *v; parse_match(json_get(sj->kid[i], "match"), &t->scales[i].m); t->scales[i].k = (v = json_get(sj->kid[i], "scale")) ? v->num : 1.0; }
+    }
     const Json *rs = json_get(j, "rules");
     if (rs && rs->t == J_ARR) {
         t->rules = calloc(rs->n ? rs->n : 1, sizeof(Rule)); t->nrules = rs->n;
@@ -134,8 +139,22 @@ Nb1Table *nb1_table_load(const char *path) {
     json_free(j); return t;
 }
 
+Nb1Table *nb1_table_with_scales(const Nb1Table *base, const Nb1ScaleSpec *specs, int n) {
+    Nb1Table *t = malloc(sizeof *t); *t = *base; t->shallow = 1;
+    t->scales = calloc((size_t)(base->nscales + n) + 1, sizeof(Scale)); t->nscales = base->nscales + n;
+    for (int i = 0; i < base->nscales; i++) t->scales[i] = base->scales[i];
+    for (int i = 0; i < n; i++) {
+        Scale *s = &t->scales[base->nscales + i]; memset(s, 0, sizeof *s); s->k = specs[i].k; Match *m = &s->m; m->kind = specs[i].kind;
+        if (specs[i].layer >= 0) { m->nlayer = 1; m->layer[0] = specs[i].layer; }
+        if (specs[i].pri >= 0) { m->npri = 1; m->pri[0] = specs[i].pri; }
+        if (specs[i].has_code) { m->has_code = 1; m->code_lo = specs[i].code_lo; m->code_hi = specs[i].code_hi; }
+    }
+    return t;
+}
 void nb1_table_free(Nb1Table *t) {
     if (!t) return;
+    if (t->shallow) { free(t->scales); free(t); return; }
+    free(t->scales);
     for (int i = 0; i < t->nedits; i++) {
         for (int k = 0; k < t->edits[i].nparts; k++) { Part *p = &t->edits[i].parts[k]; for (int r = 0; r < p->nrings; r++) free(p->ring_xy[r]); free(p->ring_xy); free(p->ring_n); }
         free(t->edits[i].parts);
@@ -263,4 +282,12 @@ const Nb1Table *nb1_tableset_select(const Nb1TableSet *ts, const Nb1State *st, c
     if (!best) return NULL;
     if (name) *name = best->name;
     return best->table;
+}
+
+int nb1_tableset_nearest_scene(const Nb1TableSet *ts, const Nb1State *st, double *similarity) {
+    if (similarity) *similarity = 0;
+    if (!ts || !ts->nrefs) return -1;
+    int nkeys = 0; uint32_t *keys = art_keys(st, &nkeys); int best = -1; double bs = -1;
+    for (int q = 0; q < ts->nrefs; q++) { double s = jaccard(keys, nkeys, ts->refs[q].keys, ts->refs[q].n); if (s > bs) { bs = s; best = ts->refs[q].id; } }
+    free(keys); if (similarity) *similarity = bs; return best;
 }

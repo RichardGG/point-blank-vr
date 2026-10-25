@@ -34,6 +34,11 @@ static void assign_depths(Nb1Item *items, int n, const Nb1Table *tab) {
     double step = (tab->z_back - tab->z_front) / 15.0;
     for (int a = 0; a < n; a++) if (!explicit_[a])
         items[a].z = tab->z_back - step * (items[a].pri * 2 + (items[a].kind == NB1_TILEMAP ? 0 : 1));
+    for (int k = 0; k < tab->nscales; k++)                                   /* "scales": move matching layers along the eye's rays */
+        for (int a = 0; a < n; a++) {
+            Nb1Item *it = &items[a]; if (it->hud || !nb1_match_item(&tab->scales[k].m, it)) continue;
+            it->z *= tab->scales[k].k; it->pd *= tab->scales[k].k; explicit_[a] = 1;
+        }
     for (int a = 0; a < n; a++) {
         Nb1Item *it = &items[a];
         if (it->has_plane) {

@@ -14,3 +14,23 @@ With `pbplay.py`: `python3 pbplay.py ... --viewer vr --pbdesk path/to/pbvr`.
 * **Build:** Linux `make pbvr` (needs SDL2, the OpenXR headers `libopenxr-dev`); Windows cross-compile with `build_windows.sh` (MinGW-w64; see the script header), or build the same three source groups with MSVC/MinGW on Windows.
 
 Status: compiled for Windows (MinGW); on Linux run against Monado's simulated HMD (software Vulkan/GL) to check the session, swapchains, frame loop, worker thread, MAME link and the aim chain. NOT yet run on Windows, with a real headset, or with real controllers.
+
+## Pause-mode editor (layer depth tuning)
+
+Pause the game (left stick click, or `P` on the mirror window), and the buttons edit instead of playing. A text panel below the picture says what is selected.
+
+| Control | Action |
+|---|---|
+| trigger | select the layer (or sprite type) the laser points at; it is outlined in yellow |
+| grip | switch the scope: whole layer (a tilemap layer, or every sprite of that priority) / this sprite type only (every sprite with the same tile code) |
+| left stick up / down | scale the selected group: push it away / pull it closer along the arcade eye's rays, so the arcade picture never changes, only its real size and distance |
+| right stick up / down | viewport size (bigger window = layers closer, sizes unchanged) |
+| A (right) | jump to the selected layer at real size (`--jump-dist`, 1 m away) and back to the playing area |
+| B (right) | save the edits |
+| X (left) / Y (left) | reset the selected group / every edit of this scene |
+
+Keyboard stand-ins on the mirror window: Enter select, G scope, Up/Down scale, PageUp/PageDown viewport, J jump, S save, X, Y.
+
+Edits are kept per scene (the captured scene whose background art is nearest) and applied by the library as a table's `"scales": [{"match": {...}, "scale": k}]` (depth and plane distance times k, non-HUD items only; all matching entries multiply). Saving appends one line to `pbvr_layer_edits.jsonl` (`--edits-out`): the scene (table name, nearest scene number and similarity, game frame), the viewport settings, and for every edit the layer, its match, the scale, and the depth before and after in authored and real metres, plus a ready-to-paste `table_snippet`. `tools/merge_scales.py pbvr_layer_edits.jsonl --scene N --table T.json` writes the last save of scene N into the table (`--list` shows what was saved).
+
+What "split a sprite from its layer" means here: choosing the sprite-type scope gives that tile code its own scale, separate from the rest of the layer. Sprites are only moved in depth (along the eye's rays), not sideways, and a single sprite instance can't be picked apart from others with the same code.

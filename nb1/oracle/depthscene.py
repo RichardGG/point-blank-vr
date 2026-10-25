@@ -108,6 +108,12 @@ def assign_depths(items, table=DEFAULT_TABLE):
     for it in items:
         if id(it) not in explicit:
             it.z = d['z_back'] - step * (it.pri * 2 + (0 if it.kind == 'tilemap' else 1))
+    for sc in table.get('scales', []):      # "scales": move matching non-HUD layers along the arcade eye's rays (depth and plane distance times k)
+        k = float(sc.get('scale', 1.0))
+        for it in items:
+            if it.hud or not _hit(sc['match'], it): continue
+            it.z *= k; explicit.add(id(it))
+            if it.plane is not None: it.plane = (it.plane[0], it.plane[1] * k)
     # strict ordering inside a depth plane: later-drawn is closer (the arcade's last-wins rule)
     for it in items:
         if it.plane is not None:                     # a projected plane's depth = where the arcade eye's centre ray meets it

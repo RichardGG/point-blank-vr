@@ -46,7 +46,11 @@ typedef struct {
     int nparts; Part *parts;
 } Edit;
 
+typedef struct { Match m; double k; } Scale;                    /* "scales": every matching non-HUD item's depth (and plane distance) is multiplied by k */
+
 struct Nb1Table {
+    int shallow;                                     /* 1 = a copy made by nb1_table_with_scales: shares rules/edits with its parent, owns only `scales` */
+    int nscales; Scale *scales;
     double far, z_front, z_back, hud_z, slot_gap; int nrules; Rule *rules;
     int ndecals; int decal_lo[16], decal_hi[16];     /* sprite tile-code ranges drawn as decals */
     int nedits; Edit *edits; char base[512];         /* base: directory of the table file (relative texture / mask paths) */

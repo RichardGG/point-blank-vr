@@ -38,7 +38,7 @@
     X(xrEnumerateSwapchainImages) X(xrAcquireSwapchainImage) X(xrWaitSwapchainImage) X(xrReleaseSwapchainImage) X(xrDestroySwapchain) \
     X(xrPollEvent) X(xrBeginSession) X(xrEndSession) X(xrRequestExitSession) X(xrWaitFrame) X(xrBeginFrame) X(xrEndFrame) X(xrLocateViews) \
     X(xrLocateSpace) X(xrStringToPath) X(xrCreateActionSet) X(xrCreateAction) X(xrSuggestInteractionProfileBindings) \
-    X(xrAttachSessionActionSets) X(xrSyncActions) X(xrGetActionStateFloat) X(xrGetActionStateBoolean) X(xrApplyHapticFeedback) X(xrResultToString)
+    X(xrAttachSessionActionSets) X(xrSyncActions) X(xrGetActionStateFloat) X(xrGetActionStateBoolean) X(xrGetActionStateVector2f) X(xrApplyHapticFeedback) X(xrResultToString)
 #define X(N) static PFN_##N N;
 XR_FUNCS(X)
 #undef X
@@ -101,6 +101,7 @@ static M4 m4_rigid_inverse(M4 a) {
     return r;
 }
 static M4 m4_yaw_pos(double yaw, const double p[3]) { M4 r = m4_id(); double c = cos(yaw), s = sin(yaw); r.m[0] = c; r.m[2] = -s; r.m[8] = s; r.m[10] = c; r.m[12] = p[0]; r.m[13] = p[1]; r.m[14] = p[2]; return r; }
+static M4 m4_trans(double x, double y, double z) { M4 r = m4_id(); r.m[12] = x; r.m[13] = y; r.m[14] = z; return r; }
 static M4 m4_scale_z(double zs) { M4 r = m4_id(); r.m[10] = zs; return r; }
 static M4 m4_proj(XrFovf f, double n, double fa) {
     double l = tan(f.angleLeft), r = tan(f.angleRight), u = tan(f.angleUp), d = tan(f.angleDown); M4 p; memset(&p, 0, sizeof p);
@@ -110,33 +111,49 @@ static M4 m4_proj(XrFovf f, double n, double fa) {
 static void m4_point(M4 a, const double v[3], double out[3]) { for (int i = 0; i < 3; i++) out[i] = a.m[i] * v[0] + a.m[4 + i] * v[1] + a.m[8 + i] * v[2] + a.m[12 + i]; }
 static void m4_dir(M4 a, const double v[3], double out[3]) { for (int i = 0; i < 3; i++) out[i] = a.m[i] * v[0] + a.m[4 + i] * v[1] + a.m[8 + i] * v[2]; }
 
+typedef struct { int scene; Nb1ScaleSpec s; } OvEntry;           /* scene = nearest captured scene id, -1 when unknown */
+typedef struct { int kind, id, pri, has_key, key; } SelItem;     /* what the pointer picked, kept so the scope can be switched */
+
 /* ------------------------------------------------------------------ options */
 typedef struct {
     char roms[512], ipc[512], table[512], tables[512];
-    double vscale, sdiag, sdist, gun_pitch, aim_yaw, aim_pitch; int no_vr, gaze;
+    double vscale, sdiag, sdist, gun_pitch, aim_yaw, aim_pitch, jump_dist; int no_vr, gaze; char edits_out[512];
 } Opts;
 
 /* ------------------------------------------------------------------ scene worker: reads states and builds scenes off the render thread */
 typedef struct {
     Opts *o; Nb1Roms *roms; Nb1TableSet *tset; Nb1Table *tab, *deftab;
-    SDL_mutex *mu; GlScene back; int ready; unsigned back_frame; const char *back_table;
-    volatile int quit, paused; volatile double zs; Source src;
+    SDL_mutex *mu; GlScene back; int ready; unsigned back_frame; const char *back_table; int back_scene; double back_sim;
+    volatile int quit, paused, rebuild; volatile double zs; Source src;
+    OvEntry *ov; int nov, capov;                       /* the editor's edits, guarded by mu */
+    Nb1State *last; unsigned last_frame; const char *last_name; int last_scene; double last_sim;   /* the state the current scene came from, so an edit can rebuild it */
 } Worker;
 
 static int worker_main(void *arg) {
     Worker *w = arg;
     while (!w->quit) {
         SDL_LockMutex(w->mu); int busy = w->ready; SDL_UnlockMutex(w->mu);
-        if (busy || w->paused) { SDL_Delay(2); continue; }
-        unsigned fr = 0; Nb1State *st = poll_state(&w->src, &fr);
-        if (!st) { SDL_Delay(2); continue; }
+        if (busy) { SDL_Delay(2); continue; }
+        unsigned fr = 0; Nb1State *st = w->paused ? NULL : poll_state(&w->src, &fr);
+        if (st) {
+            free(w->last); w->last = st; w->last_frame = fr; w->last_name = NULL; w->last_scene = -1; w->last_sim = 0;
+            if (w->tset) w->last_scene = nb1_tableset_nearest_scene(w->tset, st, &w->last_sim);
+        } else if (w->rebuild && w->last) { /* an edit: build the same state again */ }
+        else { SDL_Delay(2); continue; }
+        w->rebuild = 0;
         const Nb1Table *use = w->deftab; const char *name = NULL;
         if (w->tab) use = w->tab;
-        else if (w->tset) { const Nb1Table *sel = nb1_tableset_select(w->tset, st, st, &name); if (sel) use = sel; else name = NULL; }
+        else if (w->tset) { const Nb1Table *sel = nb1_tableset_select(w->tset, w->last, w->last, &name); if (sel) use = sel; else name = NULL; }
+        w->last_name = name;
+        Nb1ScaleSpec specs[64]; int ns = 0;
+        SDL_LockMutex(w->mu);
+        for (int i = 0; i < w->nov && ns < 64; i++) if (w->ov[i].scene == w->last_scene && w->ov[i].s.k != 1.0) specs[ns++] = w->ov[i].s;
+        SDL_UnlockMutex(w->mu);
+        Nb1Table *scaled = ns ? nb1_table_with_scales(use, specs, ns) : NULL;
         w->back.zs = w->zs; w->back.no_rulers = 1;
-        gl_scene_cpu(&w->back, st, w->roms, use); w->back.scene.aim_skip_hud = 1;
-        free(st);
-        SDL_LockMutex(w->mu); w->ready = 1; w->back_frame = fr; w->back_table = name; SDL_UnlockMutex(w->mu);
+        gl_scene_cpu(&w->back, w->last, w->roms, scaled ? scaled : use); w->back.scene.aim_skip_hud = 1;
+        nb1_table_free(scaled);
+        SDL_LockMutex(w->mu); w->ready = 1; w->back_frame = w->last_frame; w->back_table = name; w->back_scene = w->last_scene; w->back_sim = w->last_sim; SDL_UnlockMutex(w->mu);
     }
     return 0;
 }
@@ -145,7 +162,7 @@ static int worker_main(void *arg) {
 typedef struct { XrSwapchain sc; int w, h; uint32_t n; XrSwapchainImageOpenGLKHR *img; GLuint fbo, depth; } Eye;
 typedef struct {
     XrInstance inst; XrSystemId sys; XrSession sess; XrSpace local, aim_space[2]; int running, exit_requested, focused;
-    XrActionSet set; XrAction a_aim, a_trigger, a_coin, a_start, a_pause, a_recenter, a_haptic; XrPath hand[2];
+    XrActionSet set; XrAction a_aim, a_trigger, a_coin, a_start, a_pause, a_recenter, a_haptic, a_squeeze, a_stick; XrPath hand[2];
     Eye eye[2]; XrView views[2]; XrViewConfigurationView vcv[2]; XrTime pred;
 } Xr;
 
@@ -169,8 +186,9 @@ static int actions_init(Xr *xr) {
     if (make_action(xr, &xr->a_aim, "aim", XR_ACTION_TYPE_POSE_INPUT, 1) || make_action(xr, &xr->a_trigger, "trigger", XR_ACTION_TYPE_FLOAT_INPUT, 1) ||
         make_action(xr, &xr->a_coin, "coin", XR_ACTION_TYPE_BOOLEAN_INPUT, 1) || make_action(xr, &xr->a_start, "start", XR_ACTION_TYPE_BOOLEAN_INPUT, 1) ||
         make_action(xr, &xr->a_pause, "pause", XR_ACTION_TYPE_BOOLEAN_INPUT, 0) || make_action(xr, &xr->a_recenter, "recenter", XR_ACTION_TYPE_BOOLEAN_INPUT, 0) ||
-        make_action(xr, &xr->a_haptic, "haptic", XR_ACTION_TYPE_VIBRATION_OUTPUT, 1)) return -1;
-    XrActionSuggestedBinding b[24]; int n = 0;
+        make_action(xr, &xr->a_haptic, "haptic", XR_ACTION_TYPE_VIBRATION_OUTPUT, 1) ||
+        make_action(xr, &xr->a_squeeze, "squeeze", XR_ACTION_TYPE_FLOAT_INPUT, 1) || make_action(xr, &xr->a_stick, "stick", XR_ACTION_TYPE_VECTOR2F_INPUT, 1)) return -1;
+    XrActionSuggestedBinding b[32]; int n = 0;
 #define B(act, path) b[n].action = act; b[n++].binding = P(xr, path);
     B(xr->a_aim, "/user/hand/left/input/aim/pose") B(xr->a_aim, "/user/hand/right/input/aim/pose")
     B(xr->a_trigger, "/user/hand/left/input/trigger/value") B(xr->a_trigger, "/user/hand/right/input/trigger/value")
@@ -178,6 +196,8 @@ static int actions_init(Xr *xr) {
     B(xr->a_start, "/user/hand/left/input/y/click") B(xr->a_start, "/user/hand/right/input/b/click")
     B(xr->a_pause, "/user/hand/left/input/thumbstick/click") B(xr->a_recenter, "/user/hand/right/input/thumbstick/click")
     B(xr->a_haptic, "/user/hand/left/output/haptic") B(xr->a_haptic, "/user/hand/right/output/haptic")
+    B(xr->a_squeeze, "/user/hand/left/input/squeeze/value") B(xr->a_squeeze, "/user/hand/right/input/squeeze/value")
+    B(xr->a_stick, "/user/hand/left/input/thumbstick") B(xr->a_stick, "/user/hand/right/input/thumbstick")
     suggest(xr, "/interaction_profiles/oculus/touch_controller", b, n);
     n = 0;                                                                   /* Valve Index: A/B exist on both hands */
     B(xr->a_aim, "/user/hand/left/input/aim/pose") B(xr->a_aim, "/user/hand/right/input/aim/pose")
@@ -185,6 +205,8 @@ static int actions_init(Xr *xr) {
     B(xr->a_coin, "/user/hand/right/input/a/click") B(xr->a_start, "/user/hand/right/input/b/click")
     B(xr->a_pause, "/user/hand/left/input/thumbstick/click") B(xr->a_recenter, "/user/hand/right/input/thumbstick/click")
     B(xr->a_haptic, "/user/hand/left/output/haptic") B(xr->a_haptic, "/user/hand/right/output/haptic")
+    B(xr->a_squeeze, "/user/hand/left/input/squeeze/value") B(xr->a_squeeze, "/user/hand/right/input/squeeze/value")
+    B(xr->a_stick, "/user/hand/left/input/thumbstick") B(xr->a_stick, "/user/hand/right/input/thumbstick")
     suggest(xr, "/interaction_profiles/valve/index_controller", b, n);
     n = 0;                                                                   /* KHR simple controller: select = fire, menu = start */
     B(xr->a_aim, "/user/hand/left/input/aim/pose") B(xr->a_aim, "/user/hand/right/input/aim/pose")
@@ -282,10 +304,32 @@ static void draw_scene(const Gfx *g, const GlScene *gs, const M4 *mvp) {
 }
 static void draw_lines(const Gfx *g, const M4 *mvp, const float *xyz, int nverts, float r, float gr, float b) {
     float m[16]; for (int i = 0; i < 16; i++) m[i] = (float)mvp->m[i];
-    Vtx v[16]; for (int i = 0; i < nverts && i < 16; i++) v[i] = (Vtx){ xyz[i * 3], xyz[i * 3 + 1], xyz[i * 3 + 2], 0, 0 };
+    Vtx v[96]; for (int i = 0; i < nverts && i < 96; i++) v[i] = (Vtx){ xyz[i * 3], xyz[i * 3 + 1], xyz[i * 3 + 2], 0, 0 };
     glDisable(GL_DEPTH_TEST); glUseProgram(g->prog); glUniformMatrix4fv(g->uMVP, 1, GL_FALSE, m); glUniform1i(g->uMode, 3); glUniform4f(g->uBox, r, gr, b, 1);
     glBindVertexArray(g->line_vao); glBindBuffer(GL_ARRAY_BUFFER, g->line_vbo); glBufferData(GL_ARRAY_BUFFER, sizeof(Vtx) * nverts, v, GL_STREAM_DRAW);
     glDrawArrays(GL_LINES, 0, nverts); glBindVertexArray(g->vao); glBindBuffer(GL_ARRAY_BUFFER, g->vbo); glEnable(GL_DEPTH_TEST);
+}
+
+#include "editor.h"
+
+/* Appends one line to the edits file: which scene and layers were changed and by how much, plus a "scales" snippet for the scene's table.
+ * Returns the number of edits written, or -1. The caller holds W->mu. */
+static int save_edits(const char *path, const Worker *W, const GlScene *g, int scene, double sim, const char *table, unsigned frame, const Opts *o, double zs) {
+    FILE *f = fopen(path, "ab"); if (!f) return -1;
+    char ts[40]; time_t now = time(NULL); strftime(ts, sizeof ts, "%Y-%m-%dT%H:%M:%S", localtime(&now));
+    fprintf(f, "{\"saved\": \"%s\", \"scene\": {\"table\": \"%s\", \"nearest_scene\": %d, \"similarity\": %.3f, \"game_frame\": %u}, ", ts, table ? table : "default", scene, sim, frame);
+    fprintf(f, "\"viewport\": {\"screen_diag_in\": %.1f, \"screen_dist_m\": %.3f, \"viewport_scale\": %.3f, \"depth_scale\": %.4f}, \"scales\": [", o->sdiag, o->sdist, o->vscale, zs);
+    int n = 0; char sj[160], sd[80];
+    for (int i = 0; i < W->nov; i++) {
+        const OvEntry *e = &W->ov[i]; if (e->scene != scene) continue;
+        double zm = 0; int items = group_z(g, &e->s, &zm); spec_json(&e->s, sj, sizeof sj); spec_desc(&e->s, sd, sizeof sd);
+        fprintf(f, "%s{\"layer\": \"%s\", \"match\": %s, \"scale\": %.4f, \"items\": %d, \"z_authored_before\": %.3f, \"z_authored_after\": %.3f, \"z_physical_m\": %.3f}", n ? ", " : "", sd, sj, e->s.k, items, zm / e->s.k, zm, zm * zs);
+        n++;
+    }
+    fprintf(f, "], \"table_snippet\": {\"scales\": [");
+    int m = 0;
+    for (int i = 0; i < W->nov; i++) { const OvEntry *e = &W->ov[i]; if (e->scene != scene) continue; spec_json(&e->s, sj, sizeof sj); fprintf(f, "%s{\"match\": %s, \"scale\": %.4f}", m++ ? ", " : "", sj, e->s.k); }
+    fprintf(f, "]}}\n"); fclose(f); return n;
 }
 
 static double now_s(void) { return (double)SDL_GetPerformanceCounter() / (double)SDL_GetPerformanceFrequency(); }
@@ -303,7 +347,7 @@ int main(int argc, char **argv) {
 #ifdef _WIN32
     SetUnhandledExceptionFilter(crash_filter); setvbuf(stderr, NULL, _IONBF, 0);
 #endif
-    Opts o; memset(&o, 0, sizeof o); o.vscale = 1; o.sdiag = 29; o.sdist = 0.9;
+    Opts o; memset(&o, 0, sizeof o); o.vscale = 1; o.sdiag = 29; o.sdist = 0.9; o.jump_dist = 1.0; snprintf(o.edits_out, sizeof o.edits_out, "pbvr_layer_edits.jsonl");
     for (int i = 1; i < argc; i++) {
         const char *a = argv[i], *v = i + 1 < argc ? argv[i + 1] : NULL;
         if (!strcmp(a, "--roms") && v) { snprintf(o.roms, sizeof o.roms, "%s", v); i++; }
@@ -315,6 +359,8 @@ int main(int argc, char **argv) {
         else if (!strcmp(a, "--viewport-scale") && v) { o.vscale = atof(v); i++; }
         else if (!strcmp(a, "--gun-pitch") && v) { o.gun_pitch = atof(v); i++; }
         else if (!strcmp(a, "--no-vr")) o.no_vr = 1;
+        else if (!strcmp(a, "--edits-out") && v) { snprintf(o.edits_out, sizeof o.edits_out, "%s", v); i++; }
+        else if (!strcmp(a, "--jump-dist") && v) { o.jump_dist = atof(v); i++; }
         else if (!strcmp(a, "--gaze-aim")) o.gaze = 1;                                   /* aim with the head instead of a controller (testing, or no controllers) */
         else if (!strcmp(a, "--aim-offset") && v) { sscanf(v, "%lf,%lf", &o.aim_yaw, &o.aim_pitch); i++; }   /* yaw,pitch degrees added to the aim ray (testing) */
         else { fprintf(stderr, "usage: pbvr --roms DIR --ipc DIR [--tables scene_tables.json | --table T.json] [--screen-diag IN] [--screen-dist M] [--viewport-scale K] [--gun-pitch DEG] [--no-vr]\n"); return 2; }
@@ -361,6 +407,12 @@ int main(int argc, char **argv) {
     int seq = 0, trig = 0, coin = 0, start = 0, paused = 0, kcoin = 0, kstart = 0, active_hand = 1, prev_trig[2] = { 0, 0 }, prev_pause = 0, prev_rec = 0;
     double sx = 144, sy = 112, last_aim_write = 0, fps_t = now_s(); int fps_n = 0; int running = 1;
     int shot_wait = 0;
+    /* pause-mode editor state */
+    Panel panel; memset(&panel, 0, sizeof panel);
+    int has_sel = 0, scope = 0, cur_scene = -1; double cur_sim = 0; Nb1ScaleSpec sel; SelItem sel_item; memset(&sel, 0, sizeof sel); memset(&sel_item, 0, sizeof sel_item);
+    double jump = 0, last_t = now_s(); int prev_sq[2] = { 0, 0 }, prev_ba = 0, prev_bb = 0, prev_bx = 0, prev_by = 0, prev_seltrig = 0;
+    int inj_sel = 0, inj_sq = 0, inj_a = 0, inj_b = 0, inj_x = 0, inj_y = 0, kb_ls = 0, kb_rs = 0, af = 0, shot_req = 0, shot_n = 0; const int autotest = getenv("PBVR_AUTOTEST") != NULL;   /* keyboard / scripted stand-ins for the controller buttons */
+    int in_a[2] = { 0, 0 }, in_b[2] = { 0, 0 }, in_sq[2] = { 0, 0 }; float stick[2] = { 0, 0 }; char msg[160] = ""; double msg_until = 0;
 
     while (running) {
         SDL_Event ev;
@@ -371,15 +423,17 @@ int main(int argc, char **argv) {
                 case SDLK_c: kcoin = 1; break; case SDLK_v: kstart = 1; break;
                 case SDLK_p: paused = !paused; break; case SDLK_r: need_recenter = 1; break;
                 case SDLK_LEFTBRACKET: o.vscale /= 1.1; break; case SDLK_RIGHTBRACKET: o.vscale *= 1.1; break;
+                case SDLK_RETURN: inj_sel = 1; break; case SDLK_g: inj_sq = 1; break; case SDLK_j: inj_a = 1; break; case SDLK_s: inj_b = 1; break; case SDLK_x: inj_x = 1; break; case SDLK_y: inj_y = 1; break;
+                case SDLK_UP: kb_ls = 1; break; case SDLK_DOWN: kb_ls = -1; break; case SDLK_PAGEUP: kb_rs = 1; break; case SDLK_PAGEDOWN: kb_rs = -1; break;
                 default: break;
-            } else if (ev.type == SDL_KEYUP) { if (ev.key.keysym.sym == SDLK_c) kcoin = 0; if (ev.key.keysym.sym == SDLK_v) kstart = 0; }
+            } else if (ev.type == SDL_KEYUP) { if (ev.key.keysym.sym == SDLK_c) kcoin = 0; if (ev.key.keysym.sym == SDLK_v) kstart = 0; if (ev.key.keysym.sym == SDLK_UP || ev.key.keysym.sym == SDLK_DOWN) kb_ls = 0; if (ev.key.keysym.sym == SDLK_PAGEUP || ev.key.keysym.sym == SDLK_PAGEDOWN) kb_rs = 0; }
         }
         vw_m = o.sdiag * 0.0254 * 0.8 * o.vscale; zs = (NB1_W * o.sdist / vw_m) / NB1_FOCAL; W.zs = zs; W.paused = paused;
 
         /* take a finished scene from the worker */
         SDL_LockMutex(W.mu);
         if (W.ready) {
-            gl_scene_free(&front); front = W.back; memset(&W.back, 0, sizeof W.back); shown_frame = W.back_frame; table_name = W.back_table; W.ready = 0;
+            gl_scene_free(&front); front = W.back; memset(&W.back, 0, sizeof W.back); shown_frame = W.back_frame; table_name = W.back_table; cur_scene = W.back_scene; cur_sim = W.back_sim; W.ready = 0;
             SDL_UnlockMutex(W.mu);
             front.no_rulers = 1; gl_scene_upload(&front);
             glBindBuffer(GL_ARRAY_BUFFER, gfx.vbo); glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(front.nverts ? front.nverts : 1) * sizeof(Vtx), front.verts, GL_DYNAMIC_DRAW);   /* the scene's geometry */
@@ -387,7 +441,7 @@ int main(int argc, char **argv) {
 
         M4 view[2], proj[2]; int have_views = 0; XrPosef head = { { 0, 0, 0, 1 }, { 0, 0, 0 } }; int have_head = 0;
         double ray_o[3] = { 0, 0, 0 }, ray_d[3] = { 0, 0, -1 }; int have_ray = 0; double ctl_pos[3] = { 0, 0, 0 };
-        XrFrameState fs = { XR_TYPE_FRAME_STATE };
+        XrFrameState fs = { XR_TYPE_FRAME_STATE }; int trg[2] = { 0, 0 };
         if (!o.no_vr) {
             xr_events(&xr); if (xr.exit_requested) { fprintf(stderr, "pbvr: the OpenXR session asked to exit\n"); break; }
             if (!xr.running) { SDL_Delay(20); continue; }
@@ -396,23 +450,26 @@ int main(int argc, char **argv) {
             xr.pred = fs.predictedDisplayTime;
             /* input */
             XrActiveActionSet as = { xr.set, XR_NULL_PATH }; XrActionsSyncInfo sy = { XR_TYPE_ACTIONS_SYNC_INFO }; sy.countActiveActionSets = 1; sy.activeActionSets = &as; xrSyncActions(xr.sess, &sy);
-            int trg[2], cn = 0, st = 0;
+            int cn = 0, st = 0;
             for (int h = 0; h < 2; h++) {
                 XrActionStateGetInfo gi = { XR_TYPE_ACTION_STATE_GET_INFO }; gi.subactionPath = xr.hand[h];
                 XrActionStateFloat f = { XR_TYPE_ACTION_STATE_FLOAT }; gi.action = xr.a_trigger; xrGetActionStateFloat(xr.sess, &gi, &f); trg[h] = f.isActive && f.currentState > 0.55f;
-                XrActionStateBoolean b = { XR_TYPE_ACTION_STATE_BOOLEAN }; gi.action = xr.a_coin; xrGetActionStateBoolean(xr.sess, &gi, &b); if (b.isActive && b.currentState) cn = 1;
-                gi.action = xr.a_start; b = (XrActionStateBoolean){ XR_TYPE_ACTION_STATE_BOOLEAN }; xrGetActionStateBoolean(xr.sess, &gi, &b); if (b.isActive && b.currentState) st = 1;
+                XrActionStateBoolean b = { XR_TYPE_ACTION_STATE_BOOLEAN }; gi.action = xr.a_coin; xrGetActionStateBoolean(xr.sess, &gi, &b); in_a[h] = b.isActive && b.currentState; if (in_a[h]) cn = 1;
+                gi.action = xr.a_start; b = (XrActionStateBoolean){ XR_TYPE_ACTION_STATE_BOOLEAN }; xrGetActionStateBoolean(xr.sess, &gi, &b); in_b[h] = b.isActive && b.currentState; if (in_b[h]) st = 1;
+                f = (XrActionStateFloat){ XR_TYPE_ACTION_STATE_FLOAT }; gi.action = xr.a_squeeze; xrGetActionStateFloat(xr.sess, &gi, &f); in_sq[h] = f.isActive && f.currentState > 0.6f;
+                XrActionStateVector2f v2 = { XR_TYPE_ACTION_STATE_VECTOR2F }; gi.action = xr.a_stick; xrGetActionStateVector2f(xr.sess, &gi, &v2); stick[h] = v2.isActive ? v2.currentState.y : 0;
                 if (trg[h] && !prev_trig[h]) active_hand = h;
             }
             if (trg[active_hand] == 0 && trg[1 - active_hand]) active_hand = 1 - active_hand;
             { XrActionStateGetInfo gi = { XR_TYPE_ACTION_STATE_GET_INFO }; XrActionStateBoolean b = { XR_TYPE_ACTION_STATE_BOOLEAN };
               gi.action = xr.a_pause; xrGetActionStateBoolean(xr.sess, &gi, &b); int p = b.isActive && b.currentState; if (p && !prev_pause) paused = !paused; prev_pause = p;
               gi.action = xr.a_recenter; b = (XrActionStateBoolean){ XR_TYPE_ACTION_STATE_BOOLEAN }; xrGetActionStateBoolean(xr.sess, &gi, &b); p = b.isActive && b.currentState; if (p && !prev_rec) need_recenter = 1; prev_rec = p; }
-            if (trg[active_hand] && !trig) {                                                 /* a short buzz on each shot */
+            if (!paused && trg[active_hand] && !trig) {                                                 /* a short buzz on each shot */
                 XrHapticActionInfo hi = { XR_TYPE_HAPTIC_ACTION_INFO }; hi.action = xr.a_haptic; hi.subactionPath = xr.hand[active_hand];
                 XrHapticVibration vb = { XR_TYPE_HAPTIC_VIBRATION }; vb.duration = 25000000; vb.frequency = XR_FREQUENCY_UNSPECIFIED; vb.amplitude = 0.8f; xrApplyHapticFeedback(xr.sess, &hi, (XrHapticBaseHeader *)&vb);
             }
             prev_trig[0] = trg[0]; prev_trig[1] = trg[1]; trig = trg[active_hand]; coin = cn | kcoin; start = st | kstart;
+            if (paused) trig = coin = start = 0;                       /* the game is stopped; the buttons edit instead */
             /* views */
             XrViewLocateInfo li = { XR_TYPE_VIEW_LOCATE_INFO }; li.viewConfigurationType = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO; li.displayTime = fs.predictedDisplayTime; li.space = xr.local;
             XrViewState vs = { XR_TYPE_VIEW_STATE }; for (int i = 0; i < 2; i++) xr.views[i].type = XR_TYPE_VIEW; uint32_t nv = 0;
@@ -433,29 +490,96 @@ int main(int argc, char **argv) {
                 if (o.gun_pitch != 0 || o.aim_pitch != 0) { double a = (o.gun_pitch + o.aim_pitch) * deg, cs = cos(a), sn = sin(a); M4 rp = m4_id(); rp.m[5] = cs; rp.m[6] = sn; rp.m[9] = -sn; rp.m[10] = cs; c = m4_mul(c, rp); }
                 if (o.aim_yaw != 0) { double a = o.aim_yaw * deg, cs = cos(a), sn = sin(a); M4 ry = m4_id(); ry.m[0] = cs; ry.m[2] = -sn; ry.m[8] = sn; ry.m[10] = cs; c = m4_mul(c, ry); }
                 double o_phys[3] = { c.m[12], c.m[13], c.m[14] }, d_phys[3] = { -c.m[8], -c.m[9], -c.m[10] };
-                M4 to_scene = m4_mul(m4_scale_z(1.0 / zs), m4_rigid_inverse(m4_yaw_pos(yaw0, origin)));
+                M4 to_scene = m4_mul(m4_scale_z(1.0 / zs), m4_mul(m4_trans(0, 0, -jump), m4_rigid_inverse(m4_yaw_pos(yaw0, origin))));
                 m4_point(to_scene, o_phys, ray_o); m4_dir(to_scene, d_phys, ray_d); have_ray = 1; memcpy(ctl_pos, o_phys, sizeof ctl_pos);
             }
             if (have_views) for (int e = 0; e < 2; e++) {
-                M4 scene_to_phys = m4_mul(m4_yaw_pos(yaw0, origin), m4_scale_z(zs));
+                M4 scene_to_phys = m4_mul(m4_yaw_pos(yaw0, origin), m4_mul(m4_trans(0, 0, jump), m4_scale_z(zs)));
                 view[e] = m4_mul(m4_rigid_inverse(m4_from_pose(xr.views[e].pose)), scene_to_phys); proj[e] = m4_proj(xr.views[e].fov, 0.05, 600.0);
             }
         }
 
         /* aim -> arcade pixel (the same snapping as pbdesk) */
-        double hit_phys[3]; int have_hit = 0; static double dbg_rx, dbg_ry;
+        double hit_phys[3]; int have_hit = 0, hit_item = -1; static double dbg_rx, dbg_ry;
         if (have_ray && front.loaded) {
             Nb1AimSnap r;
             if (nb1_aim_snap(&front.scene, front.ids, ray_o, ray_d, 24.0, &r)) {
-                dbg_rx = r.raw_sx; dbg_ry = r.raw_sy; sx = r.a.sx; sy = r.a.sy; M4 scene_to_phys = m4_mul(m4_yaw_pos(yaw0, origin), m4_scale_z(zs)); m4_point(scene_to_phys, r.a.hit, hit_phys); have_hit = 1;
+                dbg_rx = r.raw_sx; dbg_ry = r.raw_sy; sx = r.a.sx; sy = r.a.sy; hit_item = r.a.item; M4 scene_to_phys = m4_mul(m4_yaw_pos(yaw0, origin), m4_mul(m4_trans(0, 0, jump), m4_scale_z(zs))); m4_point(scene_to_phys, r.a.hit, hit_phys); have_hit = 1;
             }
         }
-        double t = now_s();
+        double t = now_s(), dt = t - last_t; if (dt > 0.1) dt = 0.1; last_t = t;
+        if (autotest) {                                                    /* PBVR_AUTOTEST: a scripted editing session, with screenshots PBVR_SHOT.N.ppm */
+            af++; kb_ls = 0;
+            if (af == 150) paused = 1;
+            if (af == 190) inj_sel = 1;
+            if (af > 200 && af < 260) kb_ls = 1;                           /* scale the layer up */
+            if (af == 270) shot_req = 1;
+            if (af == 280) inj_a = 1;                                      /* jump to it */
+            if (af == 300) shot_req = 1;
+            if (af == 310) inj_b = 1;                                      /* save */
+            if (af == 320) inj_a = 1;                                      /* and back */
+            if (af == 340) shot_req = 1;
+            if (af == 360) { inj_sq = 1; }
+            if (af == 380) inj_sel = 1;
+            if (af > 390 && af < 440) kb_ls = -1;
+            if (af == 450) shot_req = 1;
+            if (af == 460) inj_b = 1;
+            if (af == 470) { fprintf(stderr, "pbvr: autotest finished\n"); running = 0; }
+        }
+        /* ---- pause-mode editing */
+        if (!paused) jump = 0;
+        else if (!o.no_vr) {
+            int sel_edge = (trg[active_hand] && !prev_seltrig) || inj_sel, sq_edge = (in_sq[0] && !prev_sq[0]) || (in_sq[1] && !prev_sq[1]) || inj_sq;
+            int a_edge = (in_a[1] && !prev_ba) || inj_a, b_edge = (in_b[1] && !prev_bb) || inj_b, x_edge = (in_a[0] && !prev_bx) || inj_x, y_edge = (in_b[0] && !prev_by) || inj_y, changed = 0;
+            if (sel_edge && hit_item >= 0 && front.loaded) {
+                const Nb1Item *it = &front.scene.items[hit_item];
+                sel_item = (SelItem){ it->kind, it->id, it->pri, it->has_key, it->key };
+                if (spec_from_item(&sel_item, scope, &sel)) has_sel = 1;
+            }
+            if (sq_edge && has_sel) { scope ^= 1; spec_from_item(&sel_item, scope, &sel); }
+            double ls = stick[0] + kb_ls, rs = stick[1] + kb_rs;
+            if (has_sel && fabs(ls) > 0.15) {                                          /* left stick up = push the layer away (bigger), down = pull it closer (smaller) */
+                SDL_LockMutex(W.mu);
+                OvEntry *e = ov_find(W.ov, W.nov, cur_scene, &sel);
+                if (!e) { if (W.nov == W.capov) { W.capov = W.capov ? W.capov * 2 : 16; W.ov = realloc(W.ov, (size_t)W.capov * sizeof *W.ov); } e = &W.ov[W.nov++]; e->scene = cur_scene; e->s = sel; e->s.k = 1; }
+                e->s.k *= exp(dt * ls * 0.6); if (e->s.k < 0.1) e->s.k = 0.1; if (e->s.k > 6) e->s.k = 6;
+                SDL_UnlockMutex(W.mu); changed = 1;
+            }
+            if (fabs(rs) > 0.15) { o.vscale *= exp(dt * rs * 0.7); if (o.vscale < 0.2) o.vscale = 0.2; if (o.vscale > 6) o.vscale = 6; if (jump != 0) jump = 0; }
+            if (x_edge && has_sel) {                                                    /* reset the selected group */
+                SDL_LockMutex(W.mu); for (int i = 0; i < W.nov; i++) if (W.ov[i].scene == cur_scene && spec_same(&W.ov[i].s, &sel)) { W.ov[i] = W.ov[--W.nov]; break; } SDL_UnlockMutex(W.mu);
+                changed = 1; snprintf(msg, sizeof msg, "reset %s", "the selected group"); msg_until = t + 3;
+            }
+            if (y_edge) { SDL_LockMutex(W.mu); for (int i = W.nov - 1; i >= 0; i--) if (W.ov[i].scene == cur_scene) W.ov[i] = W.ov[--W.nov]; SDL_UnlockMutex(W.mu); changed = 1; snprintf(msg, sizeof msg, "reset every edit of this scene"); msg_until = t + 3; }
+            if (a_edge) {                                                               /* jump to the selected layer at its real size, or back */
+                if (jump != 0) { jump = 0; snprintf(msg, sizeof msg, "back at the playing area"); msg_until = t + 3; }
+                else if (has_sel) { double zm; if (group_z(&front, &sel, &zm)) { double zp = zm * zs; jump = zp > o.jump_dist ? zp - o.jump_dist : 0; snprintf(msg, sizeof msg, "jumped to the layer (%.1f m away at real size); A to go back", zp > o.jump_dist ? o.jump_dist : zp); msg_until = t + 3; } }
+                else { snprintf(msg, sizeof msg, "pick a layer first (trigger)"); msg_until = t + 3; }
+            }
+            if (b_edge) {
+                SDL_LockMutex(W.mu); int nsaved = save_edits(o.edits_out, &W, &front, cur_scene, cur_sim, table_name, shown_frame, &o, zs); SDL_UnlockMutex(W.mu);
+                snprintf(msg, sizeof msg, nsaved >= 0 ? "saved %d edit(s) to %s" : "could not write %s", nsaved >= 0 ? nsaved : 0, o.edits_out); if (nsaved < 0) snprintf(msg, sizeof msg, "could not write %s", o.edits_out); msg_until = t + 4;
+            }
+            if (changed) W.rebuild = 1;
+        }
+        inj_sel = inj_sq = inj_a = inj_b = inj_x = inj_y = 0; prev_seltrig = trg[active_hand]; prev_sq[0] = in_sq[0]; prev_sq[1] = in_sq[1]; prev_ba = in_a[1]; prev_bb = in_b[1]; prev_bx = in_a[0]; prev_by = in_b[0];
         if (t - last_aim_write > 1.0 / 120) {
             FILE *f = fopen(aim_tmp, "w"); if (f) { fprintf(f, "%d %.2f %.2f %d %d %d %d\n", ++seq, sx, sy, trig, coin, start, paused); fclose(f); replace_file(aim_tmp, aim_path); }
             last_aim_write = t;
         }
 
+        /* the editor's text */
+        if (paused) {
+            char l[200]; double zm = 0; int ni = has_sel ? group_z(&front, &sel, &zm) : 0; double kk = 1;
+            if (has_sel) { SDL_LockMutex(W.mu); const OvEntry *e = ov_find(W.ov, W.nov, cur_scene, &sel); if (e) kk = e->s.k; SDL_UnlockMutex(W.mu); }
+            snprintf(l, sizeof l, "PAUSED   scene #%d (%.0f%% art match)   table: %s   frame %u", cur_scene, cur_sim * 100, table_name ? table_name : "default", shown_frame); panel_set(&panel, 0, l);
+            if (has_sel && ni) { char d[80]; spec_desc(&sel, d, sizeof d); snprintf(l, sizeof l, "SELECTED: %s (%s, %d item%s)   depth %.1f m   scale x%.2f", d, scope ? "this sprite type" : "whole layer", ni, ni == 1 ? "" : "s", zm * zs, kk); }
+            else snprintf(l, sizeof l, "Point at a layer and pull the trigger to select it");
+            panel_set(&panel, 1, l);
+            snprintf(l, sizeof l, "viewport x%.2f = %.2f m wide at %.2f m, depth x%.2f     %s", o.vscale, vw_m, o.sdist, zs, jump != 0 ? "JUMPED to the layer (real size)" : "at the playing area"); panel_set(&panel, 2, l);
+            panel_set(&panel, 3, "trigger: select   grip: layer / sprite type   left stick: scale layer   right stick: viewport size");
+            panel_set(&panel, 4, t < msg_until ? msg : "A: jump to layer / back   B: save   X: reset selected   Y: reset all   left stick click: resume");
+        }
         /* render */
         if (!o.no_vr) {
             XrCompositionLayerProjectionView pv[2]; XrCompositionLayerProjection layer = { XR_TYPE_COMPOSITION_LAYER_PROJECTION };
@@ -468,17 +592,29 @@ int main(int argc, char **argv) {
                     glViewport(0, 0, E->w, E->h); glClearColor(0.02f, 0.02f, 0.03f, 1); glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
                     M4 mvp = m4_mul(proj[e], view[e]);
                     if (front.loaded) draw_scene(&gfx, &front, &mvp);
+                    if (paused) {
+                        M4 pv_ = m4_mul(proj[e], m4_rigid_inverse(m4_from_pose(xr.views[e].pose))); M4 s2p = m4_mul(m4_yaw_pos(yaw0, origin), m4_mul(m4_trans(0, 0, jump), m4_scale_z(zs)));
+                        if (has_sel && front.loaded) for (int i = 0; i < front.scene.n; i++) {          /* outline every item of the selected group */
+                            const Nb1Item *it = &front.scene.items[i]; if (!spec_matches(&sel, it)) continue;
+                            double Pq[16][3]; int mm = item_polygon(it, front.scene.far, Pq); if (mm < 3) continue;
+                            float seg[96]; int nv = 0;
+                            for (int k = 0; k < mm && nv < 30; k++) for (int q = 0; q < 2; q++) { double o3[3]; m4_point(s2p, Pq[(k + q) % mm], o3); seg[nv * 3] = (float)o3[0]; seg[nv * 3 + 1] = (float)o3[1]; seg[nv * 3 + 2] = (float)o3[2]; nv++; }
+                            draw_lines(&gfx, &pv_, seg, nv, 1.0f, 0.85f, 0.1f);
+                        }
+                        panel_draw(&gfx, &panel, &pv_, m4_yaw_pos(yaw0, origin), o.sdist, -(vw_m * 224.0 / 288.0) / 2 - 0.02, vw_m / 480.0);
+                    }
                     if (have_ray) {                                                   /* laser and a small cross where it lands (physical coordinates) */
                         M4 pv_ = m4_mul(proj[e], m4_rigid_inverse(m4_from_pose(xr.views[e].pose)));
-                        double tip[3]; if (have_hit) memcpy(tip, hit_phys, sizeof tip); else { M4 sp = m4_mul(m4_yaw_pos(yaw0, origin), m4_scale_z(zs)); double far_s[3] = { ray_o[0] + ray_d[0] * 6, ray_o[1] + ray_d[1] * 6, ray_o[2] + ray_d[2] * 6 }; m4_point(sp, far_s, tip); }
+                        double tip[3]; if (have_hit) memcpy(tip, hit_phys, sizeof tip); else { M4 sp = m4_mul(m4_yaw_pos(yaw0, origin), m4_mul(m4_trans(0, 0, jump), m4_scale_z(zs))); double far_s[3] = { ray_o[0] + ray_d[0] * 6, ray_o[1] + ray_d[1] * 6, ray_o[2] + ray_d[2] * 6 }; m4_point(sp, far_s, tip); }
                         float L[6] = { (float)ctl_pos[0], (float)ctl_pos[1], (float)ctl_pos[2], (float)tip[0], (float)tip[1], (float)tip[2] };
                         draw_lines(&gfx, &pv_, L, 2, trig ? 1.0f : 0.2f, trig ? 0.9f : 0.9f, trig ? 0.2f : 0.3f);
                         if (have_hit) { const float s = 0.02f; float X[8 * 3] = { (float)tip[0] - s, (float)tip[1], (float)tip[2], (float)tip[0] + s, (float)tip[1], (float)tip[2], (float)tip[0], (float)tip[1] - s, (float)tip[2], (float)tip[0], (float)tip[1] + s, (float)tip[2] };
                                          draw_lines(&gfx, &pv_, X, 4, 1.0f, 0.3f, 0.3f); }
                     }
-                    if (e == 0 && getenv("PBVR_SHOT") && front.loaded && ++shot_wait == 30) {            /* PBVR_SHOT=file.ppm: save the left eye once a scene is showing (testing) */
+                    if (e == 0 && getenv("PBVR_SHOT") && front.loaded && (autotest ? shot_req : ++shot_wait == 30)) {            /* PBVR_SHOT=file.ppm: save the left eye once a scene is showing (testing) */
                         uint8_t *px = malloc((size_t)E->w * E->h * 3); glPixelStorei(GL_PACK_ALIGNMENT, 1); glReadPixels(0, 0, E->w, E->h, GL_RGB, GL_UNSIGNED_BYTE, px);
-                        FILE *sf = fopen(getenv("PBVR_SHOT"), "wb"); if (sf) { fprintf(sf, "P6\n%d %d\n255\n", E->w, E->h); for (int y = E->h - 1; y >= 0; y--) fwrite(px + (size_t)y * E->w * 3, 1, (size_t)E->w * 3, sf); fclose(sf); fprintf(stderr, "pbvr: saved %s\n", getenv("PBVR_SHOT")); }
+                        char shot_name[600]; if (autotest) snprintf(shot_name, sizeof shot_name, "%s.%d.ppm", getenv("PBVR_SHOT"), shot_n++); else snprintf(shot_name, sizeof shot_name, "%s", getenv("PBVR_SHOT")); shot_req = 0;
+                        FILE *sf = fopen(shot_name, "wb"); if (sf) { fprintf(sf, "P6\n%d %d\n255\n", E->w, E->h); for (int y = E->h - 1; y >= 0; y--) fwrite(px + (size_t)y * E->w * 3, 1, (size_t)E->w * 3, sf); fclose(sf); fprintf(stderr, "pbvr: saved %s\n", shot_name); }
                         free(px);
                     }
                     if (e == 0) {                                                     /* mirror window = left eye */
