@@ -20,6 +20,8 @@ typedef struct {
     uint8_t pal[0x8000];
 } Nb1State;
 Nb1State *nb1_state_load(const char *path);
+Nb1State *nb1_state_from_bytes(const uint8_t *b, size_t len);   /* same layout, 229,464 bytes; NULL if too short */
+#define NB1_STATE_FILE_BYTES 229464
 
 /* ---- C116 palette: 0x2000 RGB entries */
 void nb1_palette_rgb(const Nb1State *st, uint8_t rgb[0x2000][3]);

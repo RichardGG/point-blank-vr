@@ -66,3 +66,19 @@ instead of by a library, because the libraries could not be reproduced bit-for-b
 * **Texture resize** (a texture PNG whose size differs from the item's): exact integer nearest-neighbour. Textures exported by the tool are
   already the right size.
 `tests/make_assets.py` regenerates the synthetic PNGs in `tests/assets/` (no game content).
+
+## Desktop viewer: `pbdesk`
+`make pbdesk` (needs SDL2 and OpenGL 3.3; on Debian/Ubuntu `apt install libsdl2-dev libgl-dev`) builds `nb1/pbdesk`, an SDL2 + OpenGL viewer for the live scene:
+one textured quad per item (planes are texture-mapped by projecting through the arcade eye in the fragment shader), an orbit camera, mouse-ray aim
+with the snapping, and the same aim protocol as the Python viewer, so it plugs into `tools/play/pbplay.py --viewer c --pbdesk nb1/pbdesk`
+in the research repo (MAME runs the game and publishes frames; pbdesk reads them and writes `aim.txt`). `--state FILE` shows a single saved state.
+ROMs can be a folder or the MAME `ptblank.zip`. Keys are listed at the top of `desktop/pbdesk.c` (F1 in the window).
+Screenshots are PPM (`F5`, or `--shot out.ppm`).
+
+What was checked (headless, Mesa software OpenGL under Xvfb; nothing here was run on macOS or Windows):
+* Straight arcade view vs the library's software render: 0 of 64,512 px differ on all 8 frames tried (default, garden, corridor, tree, edits and rules stress tables).
+* Orbit views vs the software renderer: at most 16 of 307,200 px differ (frames 500, 3200, 21050, 2450; yaw 20 to -80).
+* `aim.txt` against the Python oracle for 14 mouse positions (hits, misses that keep the last pixel, snapped, hidden): all agree.
+* End to end with real MAME 0.264 and a saved state: the game renders live, a scene build takes about 20 ms.
+Known gaps: sprite shadow pens (fades) are drawn as a flat 50% darkening, not through the palette; no outline / label overlays yet; no sound (MAME can
+play it with `--sound`); the gun registers are still written by the MAME script from `aim.txt` (as before).

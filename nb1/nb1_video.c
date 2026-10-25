@@ -1,6 +1,8 @@
 /* NB-1 video: C355 sprites, C123 tilemaps, C116 palette. Port of oracle/nb1render.py (itself checked pixel-exact
  * against MAME 0.264). Keep operation order identical to the oracle. */
 #include "nb1.h"
+#include <strings.h>
+#include <zlib.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -10,7 +12,47 @@ static long fdiv(long a, long b) { long q = a / b; if ((a % b != 0) && ((a < 0) 
 static int pmod(int a, int m) { int r = a % m; return r < 0 ? r + m : r; }
 
 /* ---------------------------------------------------------------- ROMs / state */
+/* ---- reading ROM files from a folder or a MAME zip (stored or deflate; no zip64) */
+static uint32_t le16(const uint8_t *p) { return p[0] | p[1] << 8; }
+static uint32_t le32(const uint8_t *p) { return p[0] | p[1] << 8 | p[2] << 16 | (uint32_t)p[3] << 24; }
+static uint8_t *zip_member(const uint8_t *z, size_t zn, const char *name, size_t *n) {
+    if (zn < 22) return NULL;
+    size_t e = zn - 22; int found = 0;
+    for (;; e--) { if (le32(z + e) == 0x06054b50) { found = 1; break; } if (e == 0 || zn - e > 22 + 65535) break; }
+    if (!found) return NULL;
+    unsigned count = le16(z + e + 10); size_t p = le32(z + e + 16);
+    for (unsigned i = 0; i < count && p + 46 <= zn; i++) {
+        if (le32(z + p) != 0x02014b50) return NULL;
+        unsigned method = le16(z + p + 10), nl = le16(z + p + 28), xl = le16(z + p + 30), cl = le16(z + p + 32); size_t csize = le32(z + p + 20), usize = le32(z + p + 24), lo = le32(z + p + 42);
+        if (nl == strlen(name) && !strncmp((const char *)z + p + 46, name, nl)) {
+            if (lo + 30 > zn || le32(z + lo) != 0x04034b50) return NULL;
+            size_t ds = lo + 30 + le16(z + lo + 26) + le16(z + lo + 28); if (ds + csize > zn) return NULL;
+            uint8_t *out = malloc(usize ? usize : 1);
+            if (method == 0) { memcpy(out, z + ds, usize); }
+            else if (method == 8) {
+                z_stream zs; memset(&zs, 0, sizeof zs); if (inflateInit2(&zs, -15) != Z_OK) { free(out); return NULL; }
+                zs.next_in = (Bytef *)(z + ds); zs.avail_in = (uInt)csize; zs.next_out = out; zs.avail_out = (uInt)usize;
+                int r = inflate(&zs, Z_FINISH); inflateEnd(&zs); if (r != Z_STREAM_END) { free(out); return NULL; }
+            } else { free(out); return NULL; }
+            *n = usize; return out;
+        }
+        p += 46 + nl + xl + cl;
+    }
+    return NULL;
+}
+static uint8_t *g_zip; static size_t g_zip_n; static char g_zip_path[1024];
 static uint8_t *slurp(const char *dir, const char *name, size_t *n) {
+    size_t dl = strlen(dir);
+    if (dl > 4 && !strcasecmp(dir + dl - 4, ".zip")) {
+        if (!g_zip || strcmp(g_zip_path, dir)) {
+            free(g_zip); g_zip = NULL; FILE *f = fopen(dir, "rb"); if (!f) { fprintf(stderr, "nb1: cannot open %s\n", dir); return NULL; }
+            fseek(f, 0, SEEK_END); g_zip_n = (size_t)ftell(f); fseek(f, 0, SEEK_SET); g_zip = malloc(g_zip_n);
+            if (fread(g_zip, 1, g_zip_n, f) != g_zip_n) { fclose(f); free(g_zip); g_zip = NULL; return NULL; }
+            fclose(f); snprintf(g_zip_path, sizeof g_zip_path, "%s", dir);
+        }
+        uint8_t *b = zip_member(g_zip, g_zip_n, name, n); if (!b) fprintf(stderr, "nb1: %s not found in %s\n", name, dir);
+        return b;
+    }
     char path[1024]; snprintf(path, sizeof path, "%s/%s", dir, name);
     FILE *f = fopen(path, "rb"); if (!f) { fprintf(stderr, "nb1: cannot open %s\n", path); return NULL; }
     fseek(f, 0, SEEK_END); long len = ftell(f); fseek(f, 0, SEEK_SET);
@@ -39,20 +81,24 @@ int nb1_roms_load(Nb1Roms *r, const char *dir) {
     size_t mn; r->mask = slurp(dir, "gn1-sha0.5m", &mn); if (!r->mask) return -1; r->nmask = mn / 8;
     return 0;
 }
-void nb1_roms_free(Nb1Roms *r) { free(r->spr); free(r->chr); free(r->mask); memset(r, 0, sizeof *r); }
+void nb1_roms_free(Nb1Roms *r) {
+    free(g_zip); g_zip = NULL; g_zip_n = 0; g_zip_path[0] = 0;
+     free(r->spr); free(r->chr); free(r->mask); memset(r, 0, sizeof *r); }
 
-static int rd16(FILE *f, uint16_t *dst, size_t count) {
-    uint8_t *w = malloc(count * 2);
-    if (fread(w, 1, count * 2, f) != count * 2) { free(w); return -1; }
-    for (size_t i = 0; i < count; i++) dst[i] = (uint16_t)(w[2 * i] << 8 | w[2 * i + 1]);
-    free(w); return 0;
+#define NB1_STATE_BYTES (0x20000 + 0x10000 + 0x40 + 0x10 + 8 + 0x8000)
+Nb1State *nb1_state_from_bytes(const uint8_t *b, size_t len) {
+    if (len < NB1_STATE_BYTES) return NULL;
+    Nb1State *s = calloc(1, sizeof *s);
+    uint16_t *dst[5] = { s->spriteram, s->vram, s->ctl, s->bank, s->pos };
+    static const size_t cnt[5] = { 0x10000, 0x8000, 0x20, 8, 4 };
+    for (int k = 0; k < 5; k++) { for (size_t i = 0; i < cnt[k]; i++) dst[k][i] = (uint16_t)(b[2 * i] << 8 | b[2 * i + 1]); b += cnt[k] * 2; }
+    memcpy(s->pal, b, 0x8000);
+    return s;
 }
 Nb1State *nb1_state_load(const char *path) {
     FILE *f = fopen(path, "rb"); if (!f) return NULL;
-    Nb1State *s = calloc(1, sizeof *s);
-    if (rd16(f, s->spriteram, 0x10000) || rd16(f, s->vram, 0x8000) || rd16(f, s->ctl, 0x20) || rd16(f, s->bank, 8) ||
-        rd16(f, s->pos, 4) || fread(s->pal, 1, 0x8000, f) != 0x8000) { free(s); fclose(f); return NULL; }
-    fclose(f); return s;
+    uint8_t *buf = malloc(NB1_STATE_BYTES); size_t n = fread(buf, 1, NB1_STATE_BYTES, f); fclose(f);
+    Nb1State *s = nb1_state_from_bytes(buf, n); free(buf); return s;
 }
 
 void nb1_palette_rgb(const Nb1State *st, uint8_t rgb[0x2000][3]) {

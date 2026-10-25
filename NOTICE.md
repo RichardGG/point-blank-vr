@@ -10,3 +10,5 @@ Point Blank VR is an unofficial community project. It is not affiliated with or 
   (`player-gun.*`). Details in the original notice.
 - **Point Blank / Gun Bullet, its program, graphics, sound, ROM contents and trademarks** belong to their rights holders and are
   not covered by this project's licence. No ROMs, ROM-derived images or save states belong in this repository.
+
+- **On-screen text** in `nb1/desktop/font7x13.h` is rendered from DejaVu Sans Mono (Bitstream Vera / public-domain licence terms, https://dejavu-fonts.github.io/License.html).
