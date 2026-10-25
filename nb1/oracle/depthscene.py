@@ -202,11 +202,82 @@ def _fill(img, hole, alpha, spec, only=None):
         return _inpaint(img, todo, alpha)
     return _inpaint(img, hole if only is None else only, alpha)
 
+_INPAINT_W = {}
+for _dy in range(-2, 3):
+    for _dx in range(-2, 3):
+        if _dx or _dy: _INPAINT_W[(_dx, _dy)] = 12 // (_dx * _dx + _dy * _dy)      # 12, 6, 3, 2, 1: integer weights by squared distance
+
 def _inpaint(img, hole, alpha):
-    import cv2
-    m = (hole & (alpha > 0)).astype(np.uint8) * 255
-    if not m.any(): return img
-    return cv2.inpaint(np.ascontiguousarray(img), m, 5, cv2.INPAINT_TELEA)
+    """Deterministic fill (same in the C port, integer arithmetic only): holes are filled in layers from their edge inwards; each
+    layer pixel becomes the weighted mean of the opaque, already-known pixels in its 5x5 neighbourhood.  Hole pixels with nothing known
+    near them (the whole sprite is hole) are left alone.  Replaces OpenCV's Telea inpaint, which cannot be reproduced bit-exactly in C."""
+    hole = hole & (alpha > 0)
+    if not hole.any(): return img
+    ys, xs = np.nonzero(hole)
+    y0, y1, x0, x1 = max(ys.min() - 2, 0), min(ys.max() + 3, img.shape[0]), max(xs.min() - 2, 0), min(xs.max() + 3, img.shape[1])
+    h, w = y1 - y0, x1 - x0
+    pad = np.zeros((h + 4, w + 4, 3), np.int64); known = np.zeros((h + 4, w + 4), bool)
+    pad[2:-2, 2:-2] = img[y0:y1, x0:x1]; known[2:-2, 2:-2] = (alpha[y0:y1, x0:x1] > 0) & ~hole[y0:y1, x0:x1]
+    remaining = np.zeros((h + 4, w + 4), bool); remaining[2:-2, 2:-2] = hole[y0:y1, x0:x1]
+    while remaining.any():
+        near = np.zeros_like(remaining)
+        for dy in (-1, 0, 1):
+            for dx in (-1, 0, 1):
+                if dx or dy: near[2:-2, 2:-2] |= known[2 + dy:h + 2 + dy, 2 + dx:w + 2 + dx]
+        cand = remaining & near
+        if not cand.any(): break
+        S = np.zeros((h, w, 3), np.int64); D = np.zeros((h, w), np.int64)
+        for (dx, dy), wt in _INPAINT_W.items():
+            k = known[2 + dy:h + 2 + dy, 2 + dx:w + 2 + dx]
+            S += wt * pad[2 + dy:h + 2 + dy, 2 + dx:w + 2 + dx] * k[..., None]; D += wt * k
+        c = cand[2:-2, 2:-2]; Dc = np.maximum(D, 1)[..., None]
+        val = (2 * S + Dc) // (2 * Dc)
+        inner = pad[2:-2, 2:-2]; inner[c] = val[c]
+        known |= cand; remaining &= ~cand
+    out = img.copy(); sel = hole[y0:y1, x0:x1]; out[y0:y1, x0:x1][sel] = pad[2:-2, 2:-2].astype(np.uint8)[sel]
+    return out
+
+def _round_half_up(v): return int(math.floor(float(v) + 0.5)) if v >= 0 else -int(math.floor(abs(float(v)) + 0.5))
+def _round_half_down(v): return int(math.ceil(float(v) - 0.5)) if v >= 0 else -int(math.ceil(abs(float(v)) - 0.5))
+
+def fill_polygon(pts, w, h):
+    """Scanline polygon fill with integer vertices (same in the C port). Per row: crossings of every edge that spans the row
+    (both end rows included, an edge's lower end counted twice), float32 arithmetic, filled from round-half-up(left) to
+    round-half-down(right).  Identical to Pillow's ImageDraw.polygon on every polygon the tables use; it differs from Pillow by a few
+    pixels at thin vertices of some other shapes."""
+    f32 = np.float32
+    n = len(pts); edges = []
+    for i in range(n):
+        (x0, y0), (x1, y1) = pts[i], pts[(i + 1) % n]
+        edges.append((x0, y0, x1, y1, min(y0, y1), max(y0, y1), f32(0) if y0 == y1 else f32(f32(x1 - x0) / f32(y1 - y0))))
+    m = np.zeros((h, w), bool)
+    if n == 0: return m
+    pymin, pymax = min(e[4] for e in edges), max(e[5] for e in edges)
+    def hline(xa, y, xb):
+        if 0 <= y < h:
+            xa = max(xa, 0); xb = min(xb, w - 1)
+            if xb >= xa: m[y, xa:xb + 1] = True
+    act = []
+    for e in edges:
+        if e[4] == e[5]: hline(min(e[0], e[2]), e[4], max(e[0], e[2]))
+        else: act.append(e)
+    for y in range(max(pymin, 0), min(pymax, h - 1) + 1):
+        xx = []
+        for (x0, y0, x1, y1, ymin, ymax, dx) in act:
+            if ymin <= y <= ymax: xx.append(f32(f32(f32(y - y0) * dx) + f32(x0)))
+            if y == ymax and y < pymax: xx.append(xx[-1])
+        xx.sort()
+        for i in range(1, len(xx), 2): hline(_round_half_up(xx[i - 1]), y, _round_half_down(xx[i]))
+    return m
+
+def _dilate_rect(mask, g):
+    """Binary dilation with a (2g+1)x(2g+1) square."""
+    out = mask.copy(); h, w = mask.shape
+    for dy in range(-g, g + 1):
+        for dx in range(-g, g + 1):
+            ys, ye, xs, xe = max(dy, 0), h + min(dy, 0), max(dx, 0), w + min(dx, 0)
+            out[ys:ye, xs:xe] |= mask[ys - dy:ye - dy, xs - dx:xe - dx]
+    return out
 
 def _region_mask(it, spec, base):
     """Boolean mask over the item's texture for a rect [x0,y0,x1,y1] (arcade pixels) or a PNG mask (any alpha>0)."""
@@ -215,11 +286,9 @@ def _region_mask(it, spec, base):
         x0, y0, x1, y1 = spec['rect']
         m[max(y0 - it.y0, 0):max(y1 - it.y0, 0), max(x0 - it.x0, 0):max(x1 - it.x0, 0)] = True
     elif 'poly' in spec:      # polygon(s) in arcade pixel coordinates: [[x,y],...] or a list of such lists
-        from PIL import Image, ImageDraw
         polys = spec['poly'] if isinstance(spec['poly'][0][0], list) else [spec['poly']]
-        canvas = Image.new('L', (W, H), 0); dr = ImageDraw.Draw(canvas)
-        for p in polys: dr.polygon([tuple(pt) for pt in p], fill=255)
-        mm = np.array(canvas) > 0
+        mm = np.zeros((H, W), bool)
+        for p in polys: mm |= fill_polygon([(int(a), int(b)) for a, b in p], W, H)
         for yy in range(it.h):
             sy = it.y0 + yy
             if 0 <= sy < H:
@@ -261,10 +330,7 @@ def apply_edits(items, table, base='.'):
             if 'punch' in e:
                 pu = e['punch']
                 opaque = it.tex[..., 3] > 0
-                if pu.get('grow'):
-                    import cv2
-                    k = np.ones((2 * pu['grow'] + 1,) * 2, np.uint8)
-                    opaque = cv2.dilate(opaque.astype(np.uint8), k).astype(bool)
+                if pu.get('grow'): opaque = _dilate_rect(opaque, int(pu['grow']))
                 for tgt in [t for t in out if t is not it and _hit(pu['from'], t)]:
                     # overlap in screen coordinates
                     x0, y0 = max(it.x0, tgt.x0), max(it.y0, tgt.y0)

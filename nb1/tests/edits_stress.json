@@ -1,0 +1,28 @@
+{"_note": "Synthetic table that exercises every edit operation the C port supports (texture of every PNG type, rect/poly/mask regions, clone/inpaint/none fills, punch with grow). Not a real scene.",
+ "defaults": {"far": 40.0, "z_front": 3.0, "z_back": 12.0, "hud_z": 2.0, "slot_gap": 0.001},
+ "edits": [
+  {"match": {"kind": "tilemap", "layer": [0]}, "split": [
+     {"part": "a", "rect": [20, 30, 120, 120], "fill": "inpaint"},
+     {"part": "b", "poly": [[150, 20], [260, 40], [200, 110]], "fill": {"clone": [[0, -20], [25, 0]]}},
+     {"part": "c", "mask": "assets/mask_shape.png", "fill": "none"},
+     {"part": "d", "poly": [[[10, 150], [70, 150], [70, 200], [10, 200]], [[100, 160], [140, 160], [120, 210]]]}]},
+  {"match": {"kind": "tilemap", "layer": [1]}, "texture": "assets/tex_rgba.png"},
+  {"match": {"kind": "tilemap", "layer": [2]}, "texture": "assets/tex_rgb.png"},
+  {"match": {"kind": "tilemap", "layer": [3]}, "texture": "assets/tex_gray.png"},
+  {"match": {"kind": "sprite", "pri": [3]}, "texture": "assets/tex_pal.png"},
+  {"match": {"kind": "sprite", "pri": [4]}, "texture": "assets/tex_la.png"},
+  {"match": {"kind": "sprite", "pri": [5]}, "punch": {"from": {"kind": "tilemap", "layer": [0, 1, 2]}, "grow": 2, "fill": "inpaint"}},
+  {"match": {"kind": "sprite", "pri": [2]}, "punch": {"from": {"kind": "tilemap", "layer": [0, 3]}, "fill": "none"}},
+  {"match": {"kind": "sprite", "pri": [1]}, "punch": {"from": {"kind": "tilemap", "part": "a"}, "grow": 1, "fill": {"clone": [[5, 0], [-5, 0]]}}},
+  {"match": {"kind": "tilemap", "part": "a"}, "split": [{"part": "a2", "rect": [40, 50, 90, 100], "fill": "inpaint"}]},
+  {"match": {"kind": "tilemap", "layer": [2]}, "split": [{"part": "m2", "mask": "assets/mask_shape.png", "mask_white": false, "fill": "inpaint"}]}
+ ],
+ "rules": [
+  {"match": {"kind": "tilemap", "layer": [4, 5]}, "hud": true},
+  {"match": {"kind": "sprite", "pri": [6, 7]}, "hud": true},
+  {"match": {"kind": "tilemap", "part": "a"}, "plane": {"y": -1.2}},
+  {"match": {"kind": "tilemap", "part": "b"}, "z": 7.5, "tilt_y": 15},
+  {"match": {"kind": "tilemap", "part": "c"}, "plane": {"x": 1.7}},
+  {"match": {"kind": "tilemap", "part": "a2"}, "z": 5.0},
+  {"match": {"kind": "tilemap", "part": null, "layer": [0]}, "z": 25.0}
+ ]}

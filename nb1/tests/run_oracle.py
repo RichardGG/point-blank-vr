@@ -19,7 +19,7 @@ frames = a.frames or frames_all
 
 table = dict(D.DEFAULT_TABLE); tpath = '-'
 if a.table:
-    table = json.load(open(a.table)); table.pop('edits', None); tpath = a.table     # C ignores edits; compare like with like
+    table = json.load(open(a.table)); table['_path'] = os.path.abspath(a.table); tpath = a.table
 D.FAR = float(table.get('defaults', {}).get('far', 80.0))
 bad = 0
 def check(name, ok, detail=''):

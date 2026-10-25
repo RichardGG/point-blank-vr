@@ -23,7 +23,6 @@ static int dump(int argc, char **argv) {
     Nb1State *st = nb1_state_load(argv[3]), *sst = nb1_state_load(argv[4]); if (!st || !sst) { fprintf(stderr, "bad state\n"); return 1; }
     Nb1Table *tab = strcmp(argv[5], "-") ? nb1_table_load(argv[5]) : nb1_table_default();
     if (!tab) { fprintf(stderr, "bad table\n"); return 1; }
-    if (nb1_table_ignored_edits(tab)) fprintf(stderr, "note: %d table edits ignored (not ported)\n", nb1_table_ignored_edits(tab));
 
     uint8_t *img = malloc(NB1_W * NB1_H * 3);
     nb1_render_composite(st, sst, &roms, img); put(out, "composite.rgb", img, NB1_W * NB1_H * 3);

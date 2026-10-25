@@ -41,12 +41,11 @@ int nb1_entry_tex(const Nb1State *st, const Nb1Roms *roms, const Nb1Entry *sp, u
 /* One tilemap layer, full screen: rgba[224][288][4], pen[224][288] (-1 empty). */
 void nb1_tilemap_tex(const Nb1State *st, const Nb1Roms *roms, int i, uint8_t rgb[0x2000][3], uint8_t *rgba, int32_t *pen);
 
-/* ---- depth table (JSON; the same format as the Python tool. "edits" are not implemented yet and are counted) */
+/* ---- depth table (JSON; the same format as the Python tool, including "edits") */
 typedef struct Nb1Table Nb1Table;
 Nb1Table *nb1_table_default(void);
 Nb1Table *nb1_table_load(const char *path);          /* NULL on error */
 void nb1_table_free(Nb1Table *t);
-int  nb1_table_ignored_edits(const Nb1Table *t);
 double nb1_table_far(const Nb1Table *t);
 
 /* ---- scene */
@@ -56,6 +55,8 @@ typedef struct {
     uint8_t *tex; int32_t *pen;
     int has_key, key, pal, ncols, nrows;
     double z, tilt_x, tilt_y; int hud, rule, shadow, listidx, erased; double zoom;
+    uint8_t *cust; /* RGB art for edited / custom texels (pen -4), or NULL */
+    char part[32]; int has_part; /* name of the piece an edit split this item into */
     int has_plane; double pn[3], pd; int decal; /* drawn onto the item beneath (shot marks): never blocks aim or the visible map */
     /* derived by nb1_scene_prepare */
     double ctr[3], r[3], u[3], nrm[3], rr, uu;

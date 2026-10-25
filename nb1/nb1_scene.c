@@ -1,125 +1,12 @@
 /* NB-1 depth scene: depth table, erasers, quads, z-buffered view, aim solver, gun registers.
- * Port of oracle/depthscene.py. "edits" (texture / punch / split) are not ported yet. */
-#include "nb1.h"
-#include "nb1_json.h"
+ * Port of oracle/depthscene.py. */
+#include "nb1_internal.h"
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 const double NB1_FOCAL = 346.0;
-#define CX (NB1_W / 2.0)
-#define CY (NB1_H / 2.0)
-#define FOCAL NB1_FOCAL
-
-/* ---------------------------------------------------------------- vectors */
-typedef double V3[3];
-static double dot(const double *a, const double *b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
-static void cross(const double *a, const double *b, double *o) { o[0] = a[1] * b[2] - a[2] * b[1]; o[1] = a[2] * b[0] - a[0] * b[2]; o[2] = a[0] * b[1] - a[1] * b[0]; }
-static void unproject(double x, double y, double z, double *o) { o[0] = (x - CX) * z / FOCAL; o[1] = (CY - y) * z / FOCAL; o[2] = -z; }
-
-/* ---------------------------------------------------------------- table */
-typedef struct {
-    int kind;                                   /* -1 any */
-    int nlayer, layer[16]; int npri, pri[16]; int npal, pal[16]; int nid, id[32];
-    int has_code, code_lo, code_hi; int has_size, sw, sh; int part_mode; /* 0 none, 1 null (no part), 2 string (never) */
-    int has_cx, has_cy; double cx0, cx1, cy0, cy1;
-} Match;
-typedef struct {
-    Match m; int hud, has_z, has_plane, has_fc, has_cc, has_zd; double z, pn[3], pd, fc, cc, zd, zlo, zhi, tilt_x, tilt_y;
-} Rule;
-struct Nb1Table {
-    double far, z_front, z_back, hud_z, slot_gap; int nrules; Rule *rules; int ignored_edits;
-    int ndecals; int decal_lo[16], decal_hi[16];     /* sprite tile-code ranges drawn as decals */
-};
-
-static int num_list(const Json *j, int *out, int max) {
-    if (!j) return 0;
-    if (j->t == J_NUM) { out[0] = (int)j->num; return 1; }
-    int n = 0; for (int i = 0; i < j->n && n < max; i++) if (j->kid[i]->t == J_NUM) out[n++] = (int)j->kid[i]->num;
-    return n;
-}
-static Nb1Table *table_alloc(void) {
-    Nb1Table *t = calloc(1, sizeof *t); t->far = 80; t->z_front = 4; t->z_back = 14; t->hud_z = 2; t->slot_gap = 0.0005;
-    t->ndecals = 1; t->decal_lo[0] = 0xee5; t->decal_hi[0] = 0xee7; return t;
-}
-Nb1Table *nb1_table_default(void) {
-    Nb1Table *t = table_alloc(); t->rules = calloc(1, sizeof(Rule)); t->nrules = 1;
-    Rule *r = &t->rules[0]; r->m.kind = NB1_TILEMAP; r->m.nlayer = 2; r->m.layer[0] = 4; r->m.layer[1] = 5; r->hud = 1; return t;
-}
-Nb1Table *nb1_table_load(const char *path) {
-    FILE *f = fopen(path, "rb"); if (!f) return NULL;
-    fseek(f, 0, SEEK_END); long n = ftell(f); fseek(f, 0, SEEK_SET);
-    char *txt = malloc(n + 1); if (fread(txt, 1, n, f) != (size_t)n) { fclose(f); free(txt); return NULL; } txt[n] = 0; fclose(f);
-    Json *j = json_parse(txt); free(txt); if (!j) return NULL;
-    Nb1Table *t = table_alloc();
-    const Json *d = json_get(j, "defaults");
-    if (d) {
-        const Json *v;
-        if ((v = json_get(d, "far"))) t->far = v->num;
-        if ((v = json_get(d, "z_front"))) t->z_front = v->num;
-        if ((v = json_get(d, "z_back"))) t->z_back = v->num;
-        if ((v = json_get(d, "hud_z"))) t->hud_z = v->num;
-        if ((v = json_get(d, "slot_gap"))) t->slot_gap = v->num;
-    }
-    const Json *dc = json_get(j, "decals");
-    if (dc && dc->t == J_ARR) {
-        t->ndecals = 0;
-        for (int i = 0; i < dc->n && i < 16; i++) if (dc->kid[i]->n >= 2) { t->decal_lo[t->ndecals] = (int)dc->kid[i]->kid[0]->num; t->decal_hi[t->ndecals++] = (int)dc->kid[i]->kid[1]->num; }
-    }
-    const Json *ed = json_get(j, "edits"); if (ed && ed->t == J_ARR) t->ignored_edits = ed->n;
-    const Json *rs = json_get(j, "rules");
-    if (rs && rs->t == J_ARR) {
-        t->rules = calloc(rs->n ? rs->n : 1, sizeof(Rule)); t->nrules = rs->n;
-        for (int i = 0; i < rs->n; i++) {
-            const Json *rj = rs->kid[i], *mj = json_get(rj, "match"); Rule *r = &t->rules[i]; Match *m = &r->m; m->kind = -1;
-            for (int k = 0; mj && k < mj->n; k++) {
-                const char *key = mj->key[k]; const Json *v = mj->kid[k];
-                if (!strcmp(key, "kind")) m->kind = (v->t == J_STR && !strcmp(v->str, "tilemap")) ? NB1_TILEMAP : (v->t == J_STR && !strcmp(v->str, "sprite")) ? NB1_SPRITE : NB1_MASK;
-                else if (!strcmp(key, "layer")) m->nlayer = num_list(v, m->layer, 16);
-                else if (!strcmp(key, "pri")) m->npri = num_list(v, m->pri, 16);
-                else if (!strcmp(key, "pal")) m->npal = num_list(v, m->pal, 16);
-                else if (!strcmp(key, "id")) m->nid = num_list(v, m->id, 32);
-                else if (!strcmp(key, "code") && v->n >= 2) { m->has_code = 1; m->code_lo = (int)v->kid[0]->num; m->code_hi = (int)v->kid[1]->num; }
-                else if (!strcmp(key, "size") && v->n >= 2) { m->has_size = 1; m->sw = (int)v->kid[0]->num; m->sh = (int)v->kid[1]->num; }
-                else if (!strcmp(key, "part")) m->part_mode = v->t == J_NULL ? 1 : 2;
-                else if (!strcmp(key, "center_x") && v->n >= 2) { m->has_cx = 1; m->cx0 = v->kid[0]->num; m->cx1 = v->kid[1]->num; }
-                else if (!strcmp(key, "center_y") && v->n >= 2) { m->has_cy = 1; m->cy0 = v->kid[0]->num; m->cy1 = v->kid[1]->num; }
-            }
-            const Json *v;
-            if ((v = json_get(rj, "hud"))) r->hud = v->num != 0;
-            if ((v = json_get(rj, "z"))) { r->has_z = 1; r->z = v->num; }
-            if ((v = json_get(rj, "plane")) && v->t == J_OBJ && v->n == 1) {
-                int ax = v->key[0][0] - 'x'; if (ax >= 0 && ax < 3) { r->has_plane = 1; r->pn[ax] = 1; r->pd = v->kid[0]->num; }
-            }
-            if ((v = json_get(rj, "floor_contact"))) { r->has_fc = 1; r->fc = v->num; }
-            if ((v = json_get(rj, "ceiling_contact"))) { r->has_cc = 1; r->cc = v->num; }
-            if ((v = json_get(rj, "zoom_depth"))) { r->has_zd = 1; r->zd = v->num; r->zlo = 1.5; r->zhi = 40.0; }
-            if (r->has_zd && (v = json_get(rj, "zoom_clamp")) && v->n >= 2) { r->zlo = v->kid[0]->num; r->zhi = v->kid[1]->num; }
-            if ((v = json_get(rj, "tilt_x"))) r->tilt_x = v->num;
-            if ((v = json_get(rj, "tilt_y"))) r->tilt_y = v->num;
-        }
-    }
-    json_free(j); return t;
-}
-void nb1_table_free(Nb1Table *t) { if (t) { free(t->rules); free(t); } }
-int nb1_table_ignored_edits(const Nb1Table *t) { return t->ignored_edits; }
-double nb1_table_far(const Nb1Table *t) { return t->far; }
-
-static int in_list(const int *l, int n, int v) { for (int i = 0; i < n; i++) if (l[i] == v) return 1; return 0; }
-static int match_item(const Match *m, const Nb1Item *it) {
-    if (m->kind >= 0 && it->kind != m->kind) return 0;
-    if (m->nlayer && !(it->kind == NB1_TILEMAP && in_list(m->layer, m->nlayer, it->id))) return 0;
-    if (m->npri && !in_list(m->pri, m->npri, it->pri)) return 0;
-    if (m->npal && !in_list(m->pal, m->npal, it->pal)) return 0;
-    if (m->has_code && !(it->has_key && m->code_lo <= it->key && it->key <= m->code_hi)) return 0;
-    if (m->has_size && !(it->ncols == m->sw && it->nrows == m->sh)) return 0;
-    if (m->part_mode == 2) return 0;                    /* named parts only exist after splits (edits: not ported) */
-    if (m->has_cx) { double c = it->x0 + it->w / 2.0; if (!(m->cx0 <= c && c < m->cx1)) return 0; }
-    if (m->has_cy) { double c = it->y0 + it->h / 2.0; if (!(m->cy0 <= c && c < m->cy1)) return 0; }
-    if (m->nid && !in_list(m->id, m->nid, it->id)) return 0;
-    return 1;
-}
 
 /* ---------------------------------------------------------------- depths */
 static double fclampd(double v, double lo, double hi) { return v < lo ? lo : v > hi ? hi : v; }
@@ -130,7 +17,7 @@ static void assign_depths(Nb1Item *items, int n, const Nb1Table *tab) {
         Nb1Item *it = &items[a]; it->rule = -1;
         for (int k = 0; k < tab->nrules; k++) {
             const Rule *r = &tab->rules[k];
-            if (!match_item(&r->m, it)) continue;
+            if (!nb1_match_item(&r->m, it)) continue;
             it->rule = k;
             if (r->hud) it->hud = 1;
             if (r->has_z) { it->z = r->z; explicit_[a] = 1; }
@@ -280,7 +167,7 @@ int nb1_build_scene(const Nb1State *st, const Nb1State *sst, const Nb1Roms *roms
     Nb1Table *own = NULL; if (!tab) tab = own = nb1_table_default();
     out->far = tab->far;
     nb1_palette_rgb(st, out->rgb);
-    int cap = 6 * 8 + 256 + 1 + 64; Nb1Item *items = calloc(cap, sizeof *items); int n = 0, order = 0;
+    int cap = 1100; Nb1Item *items = calloc(cap, sizeof *items); int n = 0, order = 0;
     Nb1Entry *ents = malloc(256 * sizeof *ents); int ne = nb1_sprite_entries(sst, ents);
     for (int p = 0; p < 8; p++) {
         for (int i = 0; i < 6; i++) {
@@ -306,6 +193,7 @@ int nb1_build_scene(const Nb1State *st, const Nb1State *sst, const Nb1Roms *roms
     }
     free(ents);
     apply_erasers(items, n);
+    n = nb1_apply_edits(items, n, cap - 1, tab, out->rgb);
     /* C116 blanking window: black outside regs 0-3 (iris / curtain) */
     int cr[4], wx0, wx1, wy0, wy1;
     for (int k = 0; k < 4; k++) cr[k] = (st->pal[0x1800 + 2 * k] << 8) | st->pal[0x1801 + 2 * k];
@@ -329,7 +217,7 @@ int nb1_build_scene(const Nb1State *st, const Nb1State *sst, const Nb1Roms *roms
     for (int a = 0; a < n; a++) prepare(&items[a]);
     out->items = items; out->n = n; nb1_table_free(own); return 0;
 }
-void nb1_scene_free(Nb1Scene *s) { for (int i = 0; i < s->n; i++) { free(s->items[i].tex); free(s->items[i].pen); } free(s->items); memset(s, 0, sizeof *s); }
+void nb1_scene_free(Nb1Scene *s) { for (int i = 0; i < s->n; i++) { free(s->items[i].tex); free(s->items[i].pen); free(s->items[i].cust); } free(s->items); memset(s, 0, sizeof *s); }
 
 /* ---------------------------------------------------------------- ray / item */
 /* Plane corners (4 x V3) or 0 when any corner misses the plane. */
@@ -415,11 +303,15 @@ static void draw_item(const Nb1Scene *s, int item_index, const Nb1Item *it, cons
         if (!hit_ray(it, s->far, c->E, Dw, &t, &tx, &ty)) continue;
         int p = it->pen[(size_t)ty * it->w + tx], k = v * ow + u;
         if (shadow_pass) {
-            if (p == -2 && t < zb[k] && pen[k] >= 0) { pen[k] |= 0x800; const uint8_t *q = s->rgb[pen[k] & 0x1fff]; col[k * 3] = q[0]; col[k * 3 + 1] = q[1]; col[k * 3 + 2] = q[2]; }
+            if (p == -2 && t < zb[k]) {
+                if (pen[k] >= 0) { pen[k] |= 0x800; const uint8_t *q = s->rgb[pen[k] & 0x1fff]; col[k * 3] = q[0]; col[k * 3 + 1] = q[1]; col[k * 3 + 2] = q[2]; }
+                else if (pen[k] == -4) { col[k * 3] /= 2; col[k * 3 + 1] /= 2; col[k * 3 + 2] /= 2; }
+            }
             continue;
         }
         if (!(t < zb[k] + 1e-9)) continue;
         if (p >= 0) { pen[k] = p; const uint8_t *q = s->rgb[p & 0x1fff]; col[k * 3] = q[0]; col[k * 3 + 1] = q[1]; col[k * 3 + 2] = q[2]; zb[k] = t; if (ids && !it->decal) ids[k] = item_index; }
+        else if (p == -4 && it->cust) { const uint8_t *q = it->cust + ((size_t)ty * it->w + tx) * 3; pen[k] = -4; col[k * 3] = q[0]; col[k * 3 + 1] = q[1]; col[k * 3 + 2] = q[2]; zb[k] = t; if (ids && !it->decal) ids[k] = item_index; }
         else if (p == -3) { pen[k] = -1; col[k * 3] = col[k * 3 + 1] = col[k * 3 + 2] = 0; zb[k] = t; if (ids) ids[k] = -1; }
     }
 }
