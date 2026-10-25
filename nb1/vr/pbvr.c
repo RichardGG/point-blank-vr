@@ -199,11 +199,11 @@ static int actions_init(Xr *xr) {
 static int xr_init(Xr *xr, SDL_Window *win, PFN_xrGetInstanceProcAddr gipa) {
     XrInstanceCreateInfo ci = { XR_TYPE_INSTANCE_CREATE_INFO }; const char *ext[] = { XR_KHR_OPENGL_ENABLE_EXTENSION_NAME };
     snprintf(ci.applicationInfo.applicationName, sizeof ci.applicationInfo.applicationName, "Point Blank VR"); ci.applicationInfo.applicationVersion = 1;
-    snprintf(ci.applicationInfo.engineName, sizeof ci.applicationInfo.engineName, "nb1"); ci.applicationInfo.apiVersion = XR_CURRENT_API_VERSION;
+    snprintf(ci.applicationInfo.engineName, sizeof ci.applicationInfo.engineName, "nb1"); ci.applicationInfo.apiVersion = XR_MAKE_VERSION(1, 0, 0);     /* ask for 1.0: newer headers' XR_CURRENT_API_VERSION (1.1) is refused by runtimes that only support 1.0 */
     ci.enabledExtensionCount = 1; ci.enabledExtensionNames = ext;
     PFN_xrCreateInstance create = NULL; if (XR_FAILED(gipa(XR_NULL_HANDLE, "xrCreateInstance", (PFN_xrVoidFunction *)&create))) { fprintf(stderr, "pbvr: loader has no xrCreateInstance\n"); return -1; }
     XrResult r = create(&ci, &xr->inst);
-    if (XR_FAILED(r)) { fprintf(stderr, "pbvr: xrCreateInstance failed (%d). Is an OpenXR runtime with OpenGL support active (SteamVR, Meta Quest Link / Oculus)?\n", (int)r); return -1; }
+    if (XR_FAILED(r)) { fprintf(stderr, "pbvr: xrCreateInstance failed (%d%s). Is an OpenXR runtime with OpenGL support active (SteamVR, Meta Quest Link / Oculus)?\n", (int)r, r == XR_ERROR_API_VERSION_UNSUPPORTED ? ", API version unsupported" : r == XR_ERROR_RUNTIME_UNAVAILABLE ? ", no runtime" : ""); return -1; }
     if (load_openxr(xr->inst, gipa)) return -1;
     if (XR_FAILED(gipa(xr->inst, "xrGetOpenGLGraphicsRequirementsKHR", (PFN_xrVoidFunction *)&pxrGetOpenGLGraphicsRequirementsKHR))) { fprintf(stderr, "pbvr: no XR_KHR_opengl_enable\n"); return -1; }
     XrSystemGetInfo gi = { XR_TYPE_SYSTEM_GET_INFO }; gi.formFactor = XR_FORM_FACTOR_HEAD_MOUNTED_DISPLAY;
