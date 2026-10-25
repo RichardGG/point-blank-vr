@@ -52,8 +52,16 @@ static int load_openxr(XrInstance inst, PFN_xrGetInstanceProcAddr gipa) {
 }
 static PFN_xrGetInstanceProcAddr open_loader(void) {
 #ifdef _WIN32
-    HMODULE m = LoadLibraryA("openxr_loader.dll"); if (!m) return NULL;
-    return (PFN_xrGetInstanceProcAddr)(void *)GetProcAddress(m, "xrGetInstanceProcAddr");
+    HMODULE m = LoadLibraryA("openxr_loader.dll");
+    if (!m) {                                                    /* 126 = the file or one of the DLLs it needs was not found, 193 = wrong architecture */
+        fprintf(stderr, "pbvr: LoadLibrary(openxr_loader.dll) failed, Windows error %lu%s\n", GetLastError(),
+                GetLastError() == 126 ? " (the DLL, or a DLL it depends on, is missing; a MinGW-built loader needs libstdc++-6.dll, libgcc_s_seh-1.dll and libwinpthread-1.dll beside it)" :
+                GetLastError() == 193 ? " (the DLL is not a 64-bit x64 build)" : "");
+        return NULL;
+    }
+    PFN_xrGetInstanceProcAddr f = (PFN_xrGetInstanceProcAddr)(void *)GetProcAddress(m, "xrGetInstanceProcAddr");
+    if (!f) fprintf(stderr, "pbvr: openxr_loader.dll has no xrGetInstanceProcAddr (is it really the OpenXR loader?)\n");
+    return f;
 #else
     void *m = dlopen("libopenxr_loader.so.1", RTLD_NOW); if (!m) m = dlopen("libopenxr_loader.so", RTLD_NOW); if (!m) return NULL;
     return (PFN_xrGetInstanceProcAddr)dlsym(m, "xrGetInstanceProcAddr");
