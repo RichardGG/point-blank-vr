@@ -485,8 +485,10 @@ int main(int argc, char **argv) {
         fps_n++; if (t - fps_t > 2.0) {
             char title[200]; snprintf(title, sizeof title, "Point Blank VR   %.0f fps   scene frame %u   table %s   aim %.0f,%.0f%s   depth x%.2f", fps_n / (t - fps_t), shown_frame, table_name ? table_name : "default", sx, sy, paused ? "   PAUSED" : "", zs);
             SDL_SetWindowTitle(win, title); fprintf(stderr, "pbvr: %s\n", title);
-            if (getenv("PBVR_DEBUG"))
-                fprintf(stderr, "  head %.3f %.3f %.3f yaw0 %.3f origin %.3f %.3f %.3f ray_o %.3f %.3f %.3f ray_d %.3f %.3f %.3f raw %.1f %.1f\n", head.position.x, head.position.y, head.position.z, yaw0, origin[0], origin[1], origin[2], ray_o[0], ray_o[1], ray_o[2], ray_d[0], ray_d[1], ray_d[2], dbg_rx, dbg_ry); fps_t = t; fps_n = 0;
+            if (getenv("PBVR_DEBUG")) {
+                fprintf(stderr, "  head %.3f %.3f %.3f yaw0 %.3f origin %.3f %.3f %.3f ray_o %.3f %.3f %.3f ray_d %.3f %.3f %.3f raw %.1f %.1f\n", head.position.x, head.position.y, head.position.z, yaw0, origin[0], origin[1], origin[2], ray_o[0], ray_o[1], ray_o[2], ray_d[0], ray_d[1], ray_d[2], dbg_rx, dbg_ry);
+            }
+            fps_t = t; fps_n = 0;
         }
     }
     W.quit = 1; SDL_WaitThread(thr, NULL);
