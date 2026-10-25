@@ -562,7 +562,9 @@ int main(int argc, char **argv) {
             }
             if (b_edge) {
                 SDL_LockMutex(W.mu); int nsaved = save_edits(o.edits_out, &W, &front, cur_scene, cur_sim, table_name, shown_frame, &o, zs); SDL_UnlockMutex(W.mu);
-                snprintf(msg, sizeof msg, nsaved >= 0 ? "saved %d edit(s) to %s" : "could not write %s", nsaved >= 0 ? nsaved : 0, o.edits_out); if (nsaved < 0) snprintf(msg, sizeof msg, "could not write %s", o.edits_out); msg_until = t + 4;
+                const char *s1 = strrchr(o.edits_out, '/'), *s2 = strrchr(o.edits_out, '\\'), *bn = s1 > s2 ? s1 : s2; bn = bn ? bn + 1 : o.edits_out;
+                if (nsaved >= 0) snprintf(msg, sizeof msg, "saved %d edit(s) to %.100s", nsaved, bn); else snprintf(msg, sizeof msg, "could not write %.100s", bn);
+                msg_until = t + 4;
             }
             if (changed) W.rebuild = 1;
         }
@@ -595,7 +597,7 @@ int main(int argc, char **argv) {
             }
             SDL_UnlockMutex(W.mu);
             if (row == 2) panel_set(&side_r, row++, "(none yet)");
-            { const char *s1 = strrchr(o.edits_out, '/'), *s2 = strrchr(o.edits_out, '\\'), *bn = s1 > s2 ? s1 : s2; snprintf(r, sizeof r, "B saves to %s", bn ? bn + 1 : o.edits_out); } panel_set(&side_r, row++, ""); panel_set(&side_r, row++, r);
+            { const char *s1 = strrchr(o.edits_out, '/'), *s2 = strrchr(o.edits_out, '\\'), *bn = s1 > s2 ? s1 : s2; snprintf(r, sizeof r, "B saves to %.150s", bn ? bn + 1 : o.edits_out); } panel_set(&side_r, row++, ""); panel_set(&side_r, row++, r);
             while (row < PANEL_LINES) panel_set(&side_r, row++, "");
         }
         /* render */
