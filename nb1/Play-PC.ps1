@@ -6,11 +6,15 @@ param(
   [Parameter(Mandatory = $true)][string]$Roms,          # the same ROMs for pbvr: the ptblank folder or ptblank.zip
   [Parameter(Mandatory = $true)][string]$Research,      # the point-blank-research checkout
   [string]$Ipc = "$env:TEMP\pb_ipc",                    # folder shared by MAME and pbvr
-  [string]$Pbvr = "$PSScriptRoot\build-win\pbvr.exe",
+  [string]$Pbvr = "",                                   # default: build-win\pbvr.exe next to this script
   [switch]$NoSound,
   [string[]]$PbvrArgs = @()
 )
 $ErrorActionPreference = 'Stop'
+$here = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }   # $PSScriptRoot is empty in a param default on some PowerShell versions
+if (-not $Pbvr) { $Pbvr = Join-Path $here 'build-win\pbvr.exe' }
+if (-not (Test-Path $Pbvr)) { throw "pbvr.exe not found at $Pbvr - build it (build_windows.sh) or pass -Pbvr" }
+if (-not (Test-Path $Mame)) { throw "mame.exe not found at $Mame" }
 New-Item -ItemType Directory -Force -Path $Ipc | Out-Null
 Remove-Item "$Ipc\*" -Force -ErrorAction SilentlyContinue
 $env:PB_IPC = $Ipc; $env:PB_EVERY = '2'
