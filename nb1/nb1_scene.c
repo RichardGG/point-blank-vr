@@ -305,7 +305,7 @@ void nb1_arcade_camera(Nb1Cam *c, int scale) {
     memset(c, 0, sizeof *c); c->fwd[2] = -1; c->right[0] = 1; c->up[1] = 1; c->f = FOCAL * scale; c->w = NB1_W * scale; c->h = NB1_H * scale;
 }
 
-static void draw_item(const Nb1Scene *s, const Nb1Item *it, const Nb1Cam *c, int shadow_pass, int32_t *pen, uint8_t *col, double *zb) {
+static void draw_item(const Nb1Scene *s, int item_index, const Nb1Item *it, const Nb1Cam *c, int shadow_pass, int32_t *pen, uint8_t *col, double *zb, int32_t *ids) {
     int ow = c->w, oh = c->h; double cx = ow / 2.0, cy = oh / 2.0;
     int x0, x1, y0, y1; double cs[4][3]; int have;
     if (it->has_plane) have = plane_corners(it, s->far, cs);
@@ -341,19 +341,25 @@ static void draw_item(const Nb1Scene *s, const Nb1Item *it, const Nb1Cam *c, int
             continue;
         }
         if (!(t < zb[k] + 1e-9)) continue;
-        if (p >= 0) { pen[k] = p; const uint8_t *q = s->rgb[p & 0x1fff]; col[k * 3] = q[0]; col[k * 3 + 1] = q[1]; col[k * 3 + 2] = q[2]; zb[k] = t; }
-        else if (p == -3) { pen[k] = -1; col[k * 3] = col[k * 3 + 1] = col[k * 3 + 2] = 0; zb[k] = t; }
+        if (p >= 0) { pen[k] = p; const uint8_t *q = s->rgb[p & 0x1fff]; col[k * 3] = q[0]; col[k * 3 + 1] = q[1]; col[k * 3 + 2] = q[2]; zb[k] = t; if (ids) ids[k] = item_index; }
+        else if (p == -3) { pen[k] = -1; col[k * 3] = col[k * 3 + 1] = col[k * 3 + 2] = 0; zb[k] = t; if (ids) ids[k] = -1; }
     }
 }
-void nb1_render_cam(const Nb1Scene *s, const Nb1Cam *c, uint8_t *rgb) {
+static void render_cam(const Nb1Scene *s, const Nb1Cam *c, uint8_t *rgb, int32_t *ids) {
     size_t N = (size_t)c->w * c->h; int32_t *pen = malloc(N * 4); double *zb = malloc(N * sizeof *zb);
     for (size_t k = 0; k < N; k++) { pen[k] = -1; zb[k] = INFINITY; }
     memset(rgb, 0, N * 3);
     int *ord = malloc(s->n * sizeof *ord); for (int i = 0; i < s->n; i++) ord[i] = i;
     for (int i = 1; i < s->n; i++) { int v = ord[i], j = i - 1; while (j >= 0 && s->items[ord[j]].order > s->items[v].order) { ord[j + 1] = ord[j]; j--; } ord[j + 1] = v; }
-    for (int i = 0; i < s->n; i++) draw_item(s, &s->items[ord[i]], c, 0, pen, rgb, zb);
-    for (int i = 0; i < s->n; i++) if (s->items[ord[i]].shadow) draw_item(s, &s->items[ord[i]], c, 1, pen, rgb, zb);
+    for (int i = 0; i < s->n; i++) draw_item(s, ord[i], &s->items[ord[i]], c, 0, pen, rgb, zb, ids);
+    for (int i = 0; i < s->n; i++) if (s->items[ord[i]].shadow) draw_item(s, ord[i], &s->items[ord[i]], c, 1, pen, rgb, zb, NULL);
     free(ord); free(pen); free(zb);
+}
+void nb1_render_cam(const Nb1Scene *s, const Nb1Cam *c, uint8_t *rgb) { render_cam(s, c, rgb, NULL); }
+void nb1_visible_map(const Nb1Scene *s, int32_t *ids) {
+    Nb1Cam c; nb1_arcade_camera(&c, 1);
+    for (int k = 0; k < NB1_W * NB1_H; k++) ids[k] = -1;
+    uint8_t *rgb = malloc(NB1_W * NB1_H * 3); render_cam(s, &c, rgb, ids); free(rgb);
 }
 
 /* ---------------------------------------------------------------- aim */
@@ -368,6 +374,7 @@ int nb1_aim(const Nb1Scene *s, const double O[3], const double D[3], double fall
     }
     if (best >= 0) for (int k = 0; k < 3; k++) P[k] = O[k] + D[k] * bt;
     else {
+        if (fallback_z < 0) return 0;
         double zf = fallback_z != 0 ? fallback_z : 2.5;
         if (D[2] >= -1e-6) return 0;
         double t = (-zf - O[2]) / D[2]; if (t < 0) return 0;
@@ -376,6 +383,23 @@ int nb1_aim(const Nb1Scene *s, const double O[3], const double D[3], double fall
     if (P[2] >= -1e-3) return 0;
     out->item = best; memcpy(out->hit, P, sizeof P);
     out->sx = CX + FOCAL * P[0] / -P[2]; out->sy = CY - FOCAL * P[1] / -P[2]; return 1;
+}
+
+int nb1_aim_snap(const Nb1Scene *s, const int32_t *ids, const double O[3], const double D[3], double radius, Nb1AimSnap *out) {
+    memset(out, 0, sizeof *out);
+    if (!nb1_aim(s, O, D, -1, &out->a)) return 0;
+    out->raw_sx = out->a.sx; out->raw_sy = out->a.sy;
+    int x = (int)floor(out->a.sx), y = (int)floor(out->a.sy), inside = x >= 0 && x < NB1_W && y >= 0 && y < NB1_H;
+    out->cover = inside ? ids[y * NB1_W + x] : -1;
+    if (inside && out->cover == out->a.item) return 1;
+    double best = INFINITY; int bx = -1, by = -1;
+    for (int yy = 0; yy < NB1_H; yy++) for (int xx = 0; xx < NB1_W; xx++) {
+        if (ids[yy * NB1_W + xx] != out->a.item) continue;
+        double dx = xx + .5 - out->a.sx, dy = yy + .5 - out->a.sy, d2 = dx * dx + dy * dy;
+        if (d2 < best) { best = d2; bx = xx; by = yy; }
+    }
+    if (bx < 0 || best > radius * radius) { out->hidden = 1; return 1; }
+    out->a.sx = bx + .5; out->a.sy = by + .5; out->snapped = 1; return 1;
 }
 
 /* ---------------------------------------------------------------- gun registers */

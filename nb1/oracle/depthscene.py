@@ -388,8 +388,10 @@ def _plane_corners(it):
         out.append(P)
     return out
 
-def render_cam(items, E, fwd, right, up, f, size):
-    """Shared rasteriser: free camera at E, z-buffered, palette-index compositing (shadow = pen | 0x800, RGB art halves)."""
+def render_cam(items, E, fwd, right, up, f, size, ids=None):
+    """Shared rasteriser: free camera at E, z-buffered, palette-index compositing (shadow = pen | 0x800, RGB art halves).
+    ids: optional int32 (h, w) array filled with the index (in `items`) of the item that owns each pixel, -1 = none/blanked."""
+    index = {id(it): n for n, it in enumerate(items)} if ids is not None else None
     ow, oh = size; cx, cy = ow / 2.0, oh / 2.0
     E = np.asarray(E, float)
     pen = np.full((oh, ow), -1, np.int32); col = np.zeros((oh, ow, 3), np.uint8)
@@ -426,11 +428,14 @@ def render_cam(items, E, fwd, right, up, f, size):
         front = ok & (t < rz + 1e-9)                       # ties (coplanar art) go to the item the arcade draws later
         idx = front & (p >= 0)
         rp[idx] = p[idx]; rc[idx] = rgb[p[idx] & 0x1fff]; rz[idx] = t[idx]
+        if ids is not None: ids[y0:y1, x0:x1][idx] = index[id(it)]
         if it.cust is not None:
             cm = front & (p == -4)
             rp[cm] = -4; rc[cm] = it.cust[ty, tx][cm]; rz[cm] = t[cm]
+            if ids is not None: ids[y0:y1, x0:x1][cm] = index[id(it)]
         blk = front & (p == -3)
         rp[blk] = -1; rc[blk] = 0; rz[blk] = t[blk]
+        if ids is not None: ids[y0:y1, x0:x1][blk] = -1
     ordered = sorted(items, key=lambda i: i.order)
     for it in ordered: draw(it, False)
     for it in ordered:
@@ -492,7 +497,7 @@ def ray_item(it, O, Dv):
     if not ok[0]: return None
     return float(t[0]), int(tx[0]), int(ty[0])
 
-def aim(items, O, Dv, fallback_z=None):
+def aim(items, O, Dv, fallback_z=None, fallback=True):
     """Nearest opaque texel along the ray; returns dict(item, hit, sx, sy) with (sx, sy) the arcade pixel the
     hit point occupies as seen from the arcade eye.  Falls back to a plane at the arcade screen distance."""
     O = np.asarray(O, float); Dv = np.asarray(Dv, float)
@@ -507,6 +512,7 @@ def aim(items, O, Dv, fallback_z=None):
     if best is not None:
         P = O + Dv * best[0]; item = best[1]
     else:
+        if not fallback: return None
         zf = fallback_z or 2.5
         if Dv[2] >= -1e-6: return None
         t = (-zf - O[2]) / Dv[2]
@@ -514,7 +520,32 @@ def aim(items, O, Dv, fallback_z=None):
         P = O + Dv * t; item = None
     if P[2] >= -1e-3: return None
     sx, sy = project_arcade(P)
-    return dict(item=item, hit=P, sx=sx, sy=sy)
+    return dict(item=item, hit=P, sx=sx, sy=sy, index=None if item is None else next(n for n, i in enumerate(items) if i is item))
+
+def visible_map(items):
+    """Which item the ARCADE shows at each arcade pixel (index into `items`, -1 = nothing/blanked): the arcade-eye view with an id buffer."""
+    ids = np.full((H, W), -1, np.int32)
+    render_cam(items, (0, 0, 0), np.array([0, 0, -1.0]), np.array([1.0, 0, 0]), np.array([0, 1.0, 0]), FOCAL, (W, H), ids=ids)
+    return ids
+
+def aim_snap(items, O, Dv, ids, radius=24.0):
+    """aim() that lands on a pixel where the hit item is actually visible to the arcade eye (the game only sees 2D pixels).
+    No hit -> None (caller keeps its last pixel; there is no fallback plane).  Result adds raw_sx/raw_sy, snapped, hidden
+    (the item is not visible within `radius` px, the raw pixel is kept) and cover (index of the item that covers the raw pixel)."""
+    a = aim(items, O, Dv, fallback=False)
+    if a is None: return None
+    a['raw_sx'], a['raw_sy'] = a['sx'], a['sy']; a['snapped'] = False; a['hidden'] = False
+    x, y = int(math.floor(a['sx'])), int(math.floor(a['sy']))
+    inside = 0 <= x < W and 0 <= y < H
+    a['cover'] = int(ids[y, x]) if inside else -1
+    if inside and a['cover'] == a['index']: return a
+    ys, xs = np.nonzero(ids == a['index'])
+    if len(xs) == 0: a['hidden'] = True; return a
+    d2 = (xs + .5 - a['sx']) ** 2 + (ys + .5 - a['sy']) ** 2
+    k = int(np.argmin(d2))
+    if d2[k] > radius * radius: a['hidden'] = True; return a
+    a['sx'], a['sy'] = float(xs[k] + .5), float(ys[k] + .5); a['snapped'] = True
+    return a
 
 # ------------------------------------------------------------------ gun registers
 CAL_X, CAL_Y = 0x26, 0x0f          # EEPROM defaults, read back from the running game (0x218000+0x3a47 / +0x3a46)

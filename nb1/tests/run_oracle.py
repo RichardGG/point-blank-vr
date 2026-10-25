@@ -95,6 +95,21 @@ for T in frames:
             if ok_c and ii == itm and abs(res['sx'] - sx) < 1e-5 and abs(res['sy'] - sy) < 1e-5: good_n += 1
             else: worst = max(worst, 1)
         check('aim: item and arcade pixel for the ray set', good_n >= n - 2, f'({good_n}/{n})')
+        # 5b. visible map and snapping aim
+        ids_py = D.visible_map(items); ids_c = rd('ids.i32', np.int32, (R.H, R.W))
+        check('visible map (who the arcade shows per pixel) == oracle', (ids_py == ids_c).all(), f'({int((ids_py != ids_c).sum())} px differ)')
+        rows = [l.split('\t') for l in open(f'{out}/aimsnap.tsv').read().strip().split('\n')]; n = good_n = nsnap = 0
+        for r in rows:
+            c, ux, vy, ok_c, itm = int(r[0]), int(r[1]), int(r[2]), int(r[3]), int(r[4])
+            E, fwd, right, up = D.orbit_camera((0, 0, -8.0), 14.0, CAMS[c][0], CAMS[c][1])
+            dv = ((ux + .5 - 320) / 420.0) * right + ((240 - (vy + .5)) / 420.0) * up + fwd
+            res = D.aim_snap(items, E, dv, ids_py); n += 1
+            if res is None: good_n += (ok_c == 0); continue
+            nsnap += res['snapped']
+            same = (ok_c and itm == res['index'] and abs(res['sx'] - float(r[5])) < 1e-5 and abs(res['sy'] - float(r[6])) < 1e-5
+                    and int(r[7]) == int(res['snapped']) and int(r[8]) == int(res['hidden']) and int(r[9]) == res['cover'])
+            good_n += bool(same)
+        check('aim_snap: item, snapped pixel, snapped/hidden/cover flags', good_n >= n - 1, f'({good_n}/{n}, {nsnap} snapped)')
         # 6. gun registers (once)
         if T == frames[0]:
             rows = [list(map(int, l.split('\t'))) for l in open(f'{out}/gun.tsv').read().strip().split('\n')]; g = 0

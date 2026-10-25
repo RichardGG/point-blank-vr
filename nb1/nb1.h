@@ -72,7 +72,15 @@ void nb1_arcade_camera(Nb1Cam *c, int scale);        /* the arcade eye: reproduc
 void nb1_render_cam(const Nb1Scene *s, const Nb1Cam *c, uint8_t *rgb /* w*h*3 */);
 
 typedef struct { int item; /* index into items, -1 = fallback plane */ double hit[3], sx, sy; } Nb1Aim;
+/* nb1_aim: fallback_z 0 = plane at 2.5 m, > 0 = plane at that distance, < 0 = no fallback (a miss returns 0) */
 int nb1_aim(const Nb1Scene *s, const double O[3], const double D[3], double fallback_z /* 0 = 2.5 */, Nb1Aim *out);
+
+/* Which item the arcade shows at each arcade pixel: ids[224*288] = index into items, -1 = nothing or blanked. */
+void nb1_visible_map(const Nb1Scene *s, int32_t *ids);
+/* aim, but the arcade pixel is moved (within radius px) to where the hit item is visible to the arcade eye, because the game only
+ * sees 2D pixels. No hit => returns 0 and the caller keeps its last pixel (there is no fallback plane). */
+typedef struct { Nb1Aim a; double raw_sx, raw_sy; int snapped, hidden, cover; } Nb1AimSnap;
+int nb1_aim_snap(const Nb1Scene *s, const int32_t *ids, const double O[3], const double D[3], double radius, Nb1AimSnap *out);
 
 /* ---- gun registers */
 typedef struct { int x1, x2, y1, y2; } Nb1GunRegs;
