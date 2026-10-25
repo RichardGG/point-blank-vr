@@ -225,7 +225,7 @@ static int apply_decals(Nb1Item *items, int n, int cap, const Nb1Table *tab, dou
                 if (k) { if (n >= cap) break; piece = &items[n++]; *piece = base; piece->tex = malloc(np * 4); piece->pen = malloc(np * 4); }
                 for (size_t q = 0; q < np; q++) {
                     int sel = orig_tex[q * 4 + 3] && (own[q] == owners[k] || (k == 0 && own[q] < 0));
-                    for (int ch = 0; ch < 4; ch++) piece->tex[q * 4 + ch] = sel ? orig_tex[q * 4 + ch] : (ch < 3 ? orig_tex[q * 4 + ch] : 0);
+                    for (int ch = 0; ch < 4; ch++) piece->tex[q * 4 + ch] = sel ? orig_tex[q * 4 + ch] : 0;
                     piece->pen[q] = sel ? orig_pen[q] : -1;
                 }
                 piece->decal = 1; place_decal(piece, &items[owners[k]]); prepare(piece);
