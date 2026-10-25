@@ -182,9 +182,9 @@ static void edit_texture(Nb1Item *it, const Nb1Table *tab, const char *name) {
     char path[768]; int pw, ph; uint8_t *a; full_path(tab, name, path, sizeof path);
     if (nb1_png_load(path, &pw, &ph, &a)) { fprintf(stderr, "nb1: cannot read texture %s\n", path); return; }
     size_t N = (size_t)it->w * it->h; free(it->cust); it->cust = malloc(N * 3);
-    for (int y = 0; y < it->h; y++) for (int x = 0; x < it->w; x++) {          /* nearest-neighbour resize when the size differs (as PIL) */
+    for (int y = 0; y < it->h; y++) for (int x = 0; x < it->w; x++) {          /* nearest-neighbour resize when the size differs */
         int sx = x, sy = y;
-        if (pw != it->w || ph != it->h) { sx = (int)floor((x + 0.5) * pw / it->w); sy = (int)floor((y + 0.5) * ph / it->h); if (sx >= pw) sx = pw - 1; if (sy >= ph) sy = ph - 1; }
+        if (pw != it->w || ph != it->h) { sx = (int)(((2L * x + 1) * pw) / (2L * it->w)); sy = (int)(((2L * y + 1) * ph) / (2L * it->h)); }   /* exact integer centre sampling */
         const uint8_t *q = a + ((size_t)sy * pw + sx) * 4; size_t k = (size_t)y * it->w + x;
         memcpy(it->cust + k * 3, q, 3); memcpy(it->tex + k * 4, q, 4); it->pen[k] = q[3] > 0 ? -4 : -1;
     }

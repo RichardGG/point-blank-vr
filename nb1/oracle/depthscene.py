@@ -323,8 +323,9 @@ def apply_edits(items, table, base='.'):
         for it in targets:
             if 'texture' in e:
                 a = np.array(Image.open(os.path.join(base, e['texture'])).convert('RGBA'))
-                if a.shape[:2] != (it.h, it.w):
-                    a = np.array(Image.fromarray(a).resize((it.w, it.h), Image.NEAREST))
+                if a.shape[:2] != (it.h, it.w):      # nearest-neighbour resize by exact integer centre sampling (same in the C port)
+                    ix = ((2 * np.arange(it.w) + 1) * a.shape[1]) // (2 * it.w); iy = ((2 * np.arange(it.h) + 1) * a.shape[0]) // (2 * it.h)
+                    a = a[iy][:, ix]
                 it.cust = a[..., :3].copy(); it.tex = a.copy()
                 it.pen = np.where(a[..., 3] > 0, -4, -1).astype(np.int32)
             if 'punch' in e:

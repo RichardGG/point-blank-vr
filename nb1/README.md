@@ -8,13 +8,16 @@ No dependencies beyond libc/libm.
 | `nb1.h` | public API |
 | `nb1_video.c` | ROM and snapshot loading, C116 palette, C123 tilemaps, C355 sprite decode and stretch, full composite (equals MAME's picture) |
 | `nb1_scene.c` | depth-table rules, sprite-buffer erasers, C116 blanking window, quads (fronto, tilted, projected planes), z-buffered view, ray/quad aim solver, gun registers |
-| `nb1_json.c` | minimal JSON reader for depth tables |
+| `nb1_table.c` | depth-table JSON (rules, decals, edits) and item matching |
+| `nb1_edits.c` | edit engine (texture / punch / split), polygon rasteriser, hole fill |
+| `nb1_png.c` | small PNG reader (zlib) |
+| `nb1_json.c` | minimal JSON reader |
 | `nb1_tool.c` | command-line harness used by the tests |
 
-## Not ported yet
-Table `edits` (texture replacement, punch-outs, splits and the inpainting they need) are parsed and counted but ignored.
-Everything else in the Python scene builder is covered. Nothing here drives a game core: input is a RAM snapshot in the
-`snap.lua` layout (`Nb1State`), so a core only has to fill that struct.
+## Scope
+The whole Python scene builder is ported, including the table `edits` (texture replacement, punch-outs, splits). Nothing here drives a
+game core: input is a RAM snapshot in the `snap.lua` layout (`Nb1State`), so a core only has to fill that struct.
+Depends on libc, libm and zlib (PNG textures and masks for edits).
 
 ## Build and test
 ```sh
@@ -35,7 +38,8 @@ the arcade-eye view and five orbit views; the aim solver on a fixed ray set; the
 * Mutation check: deliberately breaking the eraser rule, tilt sign, depth slot gap and blanking window each make the test fail
   (on frames that exercise them: 3200 for tilt, 17450 for the blanking window). Changing the aim tie-break (`<` to `<=`) is NOT
   caught, because no test scene has two hits at exactly equal distance.
-* Table `edits` are not covered at all (not ported).
+* Table `edits`: the real garden, corridor and tree tables and `tests/edits_stress.json` (texture of every PNG type, rect / poly / mask regions,
+  clone / inpaint / none fills, punch with grow) match the oracle (see below for what was run).
 
 ## Aim snapping (added)
 `nb1_visible_map()` records which item the arcade shows at each pixel; `nb1_aim_snap()` moves the aimed pixel (within 24 px) to a pixel
@@ -51,3 +55,14 @@ the latest-drawn opaque non-decal item under their centre pixel. They inherit it
 where the eye ray through their centre meets that surface (2 mm in front). Decals never block `nb1_aim` or the visible map. `"decals": []` turns it off.
 Other hit effects (e.g. tiles 4bd/4ba, f78/f8a/f81) were seen after some shots but have not been examined, so they are not decals yet.
 Checked: C == Python for 40 decal items (plane, upright and tilted owners); marks lie within 2 mm of the owner's plane with identical normals.
+
+## Edits: where C, the Python oracle and the old tool differ
+The edit operations are defined by the oracle (`oracle/depthscene.py`) and ported exactly. Three operations are defined by explicit rules
+instead of by a library, because the libraries could not be reproduced bit-for-bit in C:
+* **Polygon regions**: scanline fill in float32 (round half up on the left, half down on the right). Identical to Pillow on every polygon the
+  real tables use (0 px); it differs from Pillow by a few pixels at thin vertices of ~10% of random polygons.
+* **`inpaint` fill**: deterministic layer-by-layer weighted mean of nearby opaque pixels (integer arithmetic). Replaces OpenCV Telea, so the
+  fills in the tree table look a little different (slightly streakier); garden and corridor frames checked were unchanged.
+* **Texture resize** (a texture PNG whose size differs from the item's): exact integer nearest-neighbour. Textures exported by the tool are
+  already the right size.
+`tests/make_assets.py` regenerates the synthetic PNGs in `tests/assets/` (no game content).
