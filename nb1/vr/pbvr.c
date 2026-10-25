@@ -145,7 +145,8 @@ static int worker_main(void *arg) {
         if (w->tab) use = w->tab;
         else if (w->selr) {
             if (st) { const Nb1Table *sel = nb1_selector_update(w->selr, w->last, w->last, &name); w->last_use = sel; w->last_name = name; }     /* only a NEW state moves the selector */
-            if (w->last_use) use = w->last_use; name = w->last_name;
+            if (w->last_use) use = w->last_use;
+            name = w->last_name;
         }
         w->last_name = name;
         Nb1ScaleSpec specs[64]; int ns = 0;
