@@ -134,7 +134,7 @@ static int worker_main(void *arg) {
         if (w->tab) use = w->tab;
         else if (w->tset) { const Nb1Table *sel = nb1_tableset_select(w->tset, st, st, &name); if (sel) use = sel; else name = NULL; }
         w->back.zs = w->zs; w->back.no_rulers = 1;
-        gl_scene_cpu(&w->back, st, w->roms, use);
+        gl_scene_cpu(&w->back, st, w->roms, use); w->back.scene.aim_skip_hud = 1;
         free(st);
         SDL_LockMutex(w->mu); w->ready = 1; w->back_frame = fr; w->back_table = name; SDL_UnlockMutex(w->mu);
     }

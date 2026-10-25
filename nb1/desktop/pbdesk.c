@@ -17,14 +17,14 @@
 /* ---------------------------------------------------------------- app */
 typedef struct {
     char roms[512], ipc[512], statefile[512], table[512], tables[512], shot[512];
-    int w, h, mode, hide_hud, use_table, paused, shot_after, show_help, no_text, shot_game_frame, frames_limit, mouse_x, mouse_y, mouse_set, trigger_set, ruler;
+    int w, h, mode, hide_hud, use_table, paused, shot_after, show_help, no_text, shot_game_frame, frames_limit, mouse_x, mouse_y, mouse_set, trigger_set, ruler, aim_hud;
     double vscale, sdiag, sdist;
     double yaw, pitch, dist, focus, focal;
 } Opts;
 
 static void die_usage(void) {
     fprintf(stderr, "usage: pbdesk --roms DIR (--ipc DIR | --state FILE) [--table T.json | --tables scene_tables.json] [--res WxH] [--yaw N] [--pitch N] [--dist N]\n"
-                    "              [--focus N] [--focal N] [--hide-hud] [--no-text] [--no-ruler | --ruler-all] [--viewport-scale K] [--screen-diag IN] [--screen-dist M] [--shot out.ppm [--shot-after N | --shot-game-frame N]]\n");
+                    "              [--focus N] [--focal N] [--hide-hud] [--no-text] [--no-ruler | --ruler-all] [--aim-hud] [--viewport-scale K] [--screen-diag IN] [--screen-dist M] [--shot out.ppm [--shot-after N | --shot-game-frame N]]\n");
     exit(2);
 }
 
@@ -55,6 +55,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(a, "--hide-hud")) o.hide_hud = 1;
         else if (!strcmp(a, "--no-text")) o.no_text = 1;
         else if (!strcmp(a, "--no-ruler")) o.ruler = 0;
+        else if (!strcmp(a, "--aim-hud")) o.aim_hud = 1;                 /* HUD items can be hit by the gun again */
         else if (!strcmp(a, "--viewport-scale") && i + 1 < argc) o.vscale = atof(argv[++i]);
         else if (!strcmp(a, "--screen-diag") && i + 1 < argc) o.sdiag = atof(argv[++i]);
         else if (!strcmp(a, "--screen-dist") && i + 1 < argc) o.sdist = atof(argv[++i]);
@@ -172,7 +173,7 @@ int main(int argc, char **argv) {
             const Nb1Table *use = deftab; table_name = NULL;
             if (o.use_table && tab) use = tab;
             else if (o.use_table && tset) { const Nb1Table *sel = nb1_tableset_select(tset, cur, cur, &table_name); if (sel) use = sel; else table_name = NULL; }
-            gl_scene_build(&gs, cur, &roms, use);
+            gl_scene_build(&gs, cur, &roms, use); gs.scene.aim_skip_hud = !o.aim_hud;      /* the gun ray passes through HUD items */
             build_ms = (double)(SDL_GetPerformanceCounter() - t0) * 1000.0 / SDL_GetPerformanceFrequency();
             glBindBuffer(GL_ARRAY_BUFFER, vbo); glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)gs.nverts * sizeof(Vtx), gs.verts, GL_DYNAMIC_DRAW);
             glBindBuffer(GL_ARRAY_BUFFER, vbo3); glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(gs.nrverts ? gs.nrverts : 1) * sizeof(Vtx), gs.rverts, GL_STATIC_DRAW);

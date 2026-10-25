@@ -336,7 +336,7 @@ void nb1_visible_map(const Nb1Scene *s, int32_t *ids) {
 int nb1_aim(const Nb1Scene *s, const double O[3], const double D[3], double fallback_z, Nb1Aim *out) {
     int best = -1; double bt = 0, P[3];
     for (int i = 0; i < s->n; i++) {
-        const Nb1Item *it = &s->items[i]; if (it->kind == NB1_MASK || it->decal) continue;
+        const Nb1Item *it = &s->items[i]; if (it->kind == NB1_MASK || it->decal || (s->aim_skip_hud && it->hud)) continue;
         double t; int tx, ty;
         if (!hit_ray(it, s->far, O, D, &t, &tx, &ty)) continue;
         if (it->tex[((size_t)ty * it->w + tx) * 4 + 3] == 0) continue;

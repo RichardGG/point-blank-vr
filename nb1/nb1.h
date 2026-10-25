@@ -71,7 +71,8 @@ typedef struct {
     /* derived by nb1_scene_prepare */
     double ctr[3], r[3], u[3], nrm[3], rr, uu;
 } Nb1Item;
-typedef struct { Nb1Item *items; int n; double far; uint8_t rgb[0x2000][3]; } Nb1Scene;
+typedef struct { Nb1Item *items; int n; double far; uint8_t rgb[0x2000][3];
+                 int aim_skip_hud; /* 1 = aiming ignores HUD items (the ray passes through them); 0 by default; set by the viewers */ } Nb1Scene;
 
 int  nb1_build_scene(const Nb1State *st, const Nb1State *sst, const Nb1Roms *roms, const Nb1Table *tab, Nb1Scene *out);
 void nb1_scene_free(Nb1Scene *s);

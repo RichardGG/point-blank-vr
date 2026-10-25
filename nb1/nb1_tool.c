@@ -90,7 +90,19 @@ static int dump(int argc, char **argv) {
             fprintf(sf, "%u\t%d\t%d\t%d\t%d\t%.9g\t%.9g\t%d\t%d\t%d\n", c, ux, vy, ok, ok ? r.a.item : -2, ok ? r.a.sx : 0.0, ok ? r.a.sy : 0.0, ok ? r.snapped : 0, ok ? r.hidden : 0, ok ? r.cover : 0);
         }
     }
-    fclose(sf); free(ids);
+    fclose(sf);
+    /* the same rays with the HUD ignored for aiming */
+    sc.aim_skip_hud = 1; sf = fopenf(out, "aimhud.tsv", "w");
+    for (unsigned c = 0; c < sizeof CAMS / sizeof *CAMS; c++) {
+        Nb1Cam oc; nb1_orbit_camera(target, 14.0, CAMS[c][0], CAMS[c][1], &oc); oc.f = 420.0;
+        for (int vy = 8; vy < 480; vy += 24) for (int ux = 8; ux < 640; ux += 24) {
+            double a = (ux + .5 - 320) / oc.f, b = (240 - (vy + .5)) / oc.f, d[3];
+            for (int k = 0; k < 3; k++) d[k] = a * oc.right[k] + b * oc.up[k] + oc.fwd[k];
+            Nb1AimSnap r; int ok = nb1_aim_snap(&sc, ids, oc.E, d, 24.0, &r);
+            fprintf(sf, "%u\t%d\t%d\t%d\t%d\t%.9g\t%.9g\t%d\t%d\t%d\n", c, ux, vy, ok, ok ? r.a.item : -2, ok ? r.a.sx : 0.0, ok ? r.a.sy : 0.0, ok ? r.snapped : 0, ok ? r.hidden : 0, ok ? r.cover : 0);
+        }
+    }
+    fclose(sf); sc.aim_skip_hud = 0; free(ids);
 
     f = fopenf(out, "gun.tsv", "w");
     for (int y = 0; y < NB1_H; y++) for (int x = 0; x < NB1_W; x++) {

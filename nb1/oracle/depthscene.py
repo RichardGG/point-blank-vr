@@ -668,13 +668,13 @@ def ray_item(it, O, Dv):
     if not ok[0]: return None
     return float(t[0]), int(tx[0]), int(ty[0])
 
-def aim(items, O, Dv, fallback_z=None, fallback=True):
+def aim(items, O, Dv, fallback_z=None, fallback=True, skip_hud=False):
     """Nearest opaque texel along the ray; returns dict(item, hit, sx, sy) with (sx, sy) the arcade pixel the
     hit point occupies as seen from the arcade eye.  Falls back to a plane at the arcade screen distance."""
     O = np.asarray(O, float); Dv = np.asarray(Dv, float)
     best = None
     for it in items:
-        if it.kind == 'mask' or it.decal: continue
+        if it.kind == 'mask' or it.decal or (skip_hud and it.hud): continue
         h = ray_item(it, O, Dv)
         if h is None: continue
         t, tx, ty = h
@@ -699,11 +699,11 @@ def visible_map(items):
     render_cam(items, (0, 0, 0), np.array([0, 0, -1.0]), np.array([1.0, 0, 0]), np.array([0, 1.0, 0]), FOCAL, (W, H), ids=ids)
     return ids
 
-def aim_snap(items, O, Dv, ids, radius=24.0):
+def aim_snap(items, O, Dv, ids, radius=24.0, skip_hud=False):
     """aim() that lands on a pixel where the hit item is actually visible to the arcade eye (the game only sees 2D pixels).
     No hit -> None (caller keeps its last pixel; there is no fallback plane).  Result adds raw_sx/raw_sy, snapped, hidden
     (the item is not visible within `radius` px, the raw pixel is kept) and cover (index of the item that covers the raw pixel)."""
-    a = aim(items, O, Dv, fallback=False)
+    a = aim(items, O, Dv, fallback=False, skip_hud=skip_hud)
     if a is None: return None
     a['raw_sx'], a['raw_sy'] = a['sx'], a['sy']; a['snapped'] = False; a['hidden'] = False
     x, y = int(math.floor(a['sx'])), int(math.floor(a['sy']))
