@@ -360,7 +360,7 @@ int main(int argc, char **argv) {
     char aim_path[1100], aim_tmp[1100]; snprintf(aim_path, sizeof aim_path, "%s/aim.txt", o.ipc); snprintf(aim_tmp, sizeof aim_tmp, "%s/aim.tmp", o.ipc);
     int seq = 0, trig = 0, coin = 0, start = 0, paused = 0, kcoin = 0, kstart = 0, active_hand = 1, prev_trig[2] = { 0, 0 }, prev_pause = 0, prev_rec = 0;
     double sx = 144, sy = 112, last_aim_write = 0, fps_t = now_s(); int fps_n = 0; int running = 1;
-    GLuint mirror_fbo = 0; (void)mirror_fbo;
+    int shot_wait = 0;
 
     while (running) {
         SDL_Event ev;
@@ -382,6 +382,7 @@ int main(int argc, char **argv) {
             gl_scene_free(&front); front = W.back; memset(&W.back, 0, sizeof W.back); shown_frame = W.back_frame; table_name = W.back_table; W.ready = 0;
             SDL_UnlockMutex(W.mu);
             front.no_rulers = 1; gl_scene_upload(&front);
+            glBindBuffer(GL_ARRAY_BUFFER, gfx.vbo); glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(front.nverts ? front.nverts : 1) * sizeof(Vtx), front.verts, GL_DYNAMIC_DRAW);   /* the scene's geometry */
         } else SDL_UnlockMutex(W.mu);
 
         M4 view[2], proj[2]; int have_views = 0; XrPosef head = { { 0, 0, 0, 1 }, { 0, 0, 0 } }; int have_head = 0;
@@ -474,6 +475,11 @@ int main(int argc, char **argv) {
                         draw_lines(&gfx, &pv_, L, 2, trig ? 1.0f : 0.2f, trig ? 0.9f : 0.9f, trig ? 0.2f : 0.3f);
                         if (have_hit) { const float s = 0.02f; float X[8 * 3] = { (float)tip[0] - s, (float)tip[1], (float)tip[2], (float)tip[0] + s, (float)tip[1], (float)tip[2], (float)tip[0], (float)tip[1] - s, (float)tip[2], (float)tip[0], (float)tip[1] + s, (float)tip[2] };
                                          draw_lines(&gfx, &pv_, X, 4, 1.0f, 0.3f, 0.3f); }
+                    }
+                    if (e == 0 && getenv("PBVR_SHOT") && front.loaded && ++shot_wait == 30) {            /* PBVR_SHOT=file.ppm: save the left eye once a scene is showing (testing) */
+                        uint8_t *px = malloc((size_t)E->w * E->h * 3); glPixelStorei(GL_PACK_ALIGNMENT, 1); glReadPixels(0, 0, E->w, E->h, GL_RGB, GL_UNSIGNED_BYTE, px);
+                        FILE *sf = fopen(getenv("PBVR_SHOT"), "wb"); if (sf) { fprintf(sf, "P6\n%d %d\n255\n", E->w, E->h); for (int y = E->h - 1; y >= 0; y--) fwrite(px + (size_t)y * E->w * 3, 1, (size_t)E->w * 3, sf); fclose(sf); fprintf(stderr, "pbvr: saved %s\n", getenv("PBVR_SHOT")); }
+                        free(px);
                     }
                     if (e == 0) {                                                     /* mirror window = left eye */
                         int ww, wh; SDL_GetWindowSize(win, &ww, &wh);
