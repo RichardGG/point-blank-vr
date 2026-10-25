@@ -181,7 +181,7 @@ typedef struct {
     Nb1Scene scene; int32_t *ids; int loaded;
     Draw *draws; int ndraws; Vtx *verts; int nverts, capverts;
     int *order;                      /* item indices sorted by arcade order */
-    Ruler *rulers; int nrulers; Vtx *rverts; int nrverts, caprverts; Label *labels; int nlabels;   /* metre rulers beside each depth layer */
+    Ruler *rulers; int nrulers; Vtx *rverts; int nrverts, caprverts; Label *labels; int nlabels; double zs;   /* metre rulers beside each depth layer */
 } GlScene;
 
 static void push_vtx(GlScene *g, double x, double y, double z, double u, double v) {
@@ -315,7 +315,7 @@ static void build_rulers(GlScene *g) {
         }
         r->count = g->nrverts - r->first;
         char name[40], text[80]; if (q->tilemap) snprintf(name, sizeof name, "L%d", q->id); else snprintf(name, sizeof name, "S%d x%d", q->pri, q->n);
-        snprintf(text, sizeof text, "%s  z=%.1fm  h=%.1fm", name, z, H); add_label(g, x, q->ymax + 0.12 + 0.34 * stack, -z, text, 0, r->hud, r->col);
+        snprintf(text, sizeof text, "%s  z=%.1fm  h=%.1fm", name, z * g->zs, H); add_label(g, x, q->ymax + 0.12 + 0.34 * stack, -z, text, 0, r->hud, r->col);
     }
 }
 
@@ -325,7 +325,7 @@ static void gl_scene_free(GlScene *g) {
     for (int i = 0; i < g->ndraws; i++) { if (g->draws[i].tex) glDeleteTextures(1, &g->draws[i].tex); if (g->draws[i].shadow_tex) glDeleteTextures(1, &g->draws[i].shadow_tex); }
     free(g->draws); free(g->verts); free(g->order); free(g->ids);
     if (g->loaded) nb1_scene_free(&g->scene);
-    memset(g, 0, sizeof *g);
+    { double zs_ = g->zs; memset(g, 0, sizeof *g); g->zs = zs_; }
 }
 
 static void gl_scene_build(GlScene *g, const Nb1State *st, const Nb1Roms *roms, const Nb1Table *tab) {
@@ -360,13 +360,15 @@ static void gl_scene_build(GlScene *g, const Nb1State *st, const Nb1Roms *roms, 
 }
 
 /* ---------------------------------------------------------------- matrices */
-static void make_mvp(const Nb1Cam *c, int vw, int vh, float *m /* column-major */) {
+static void make_mvp(const Nb1Cam *c, int vw, int vh, double zs, float *m /* column-major */) {
     double n = 0.3, f = 400.0, P00 = 2.0 * c->f / vw, P11 = 2.0 * c->f / vh, P22 = -(f + n) / (f - n), P23 = -2.0 * f * n / (f - n);
     /* camera space: x = rel.right, y = rel.up, z = -(rel.fwd) */
     double V[4][4] = { { c->right[0], c->right[1], c->right[2], -(c->right[0] * c->E[0] + c->right[1] * c->E[1] + c->right[2] * c->E[2]) },
                        { c->up[0], c->up[1], c->up[2], -(c->up[0] * c->E[0] + c->up[1] * c->E[1] + c->up[2] * c->E[2]) },
                        { -c->fwd[0], -c->fwd[1], -c->fwd[2], (c->fwd[0] * c->E[0] + c->fwd[1] * c->E[1] + c->fwd[2] * c->E[2]) },
                        { 0, 0, 0, 1 } };
+    /* model matrix diag(1,1,zs): the scene is authored for the arcade eye (f = 346 px); a physical viewport wants the same sizes at zs times the depth */
+    for (int r = 0; r < 3; r++) V[r][2] *= zs;
     double Pm[4][4] = { { P00, 0, 0, 0 }, { 0, P11, 0, 0 }, { 0, 0, P22, P23 }, { 0, 0, -1, 0 } };
     for (int r = 0; r < 4; r++) for (int col = 0; col < 4; col++) {
         double s = 0; for (int k = 0; k < 4; k++) s += Pm[r][k] * V[k][col];
@@ -390,12 +392,13 @@ static void put_text(uint8_t *buf, int bw, int bh, int x, int y, const char *s) 
 typedef struct {
     char roms[512], ipc[512], statefile[512], table[512], tables[512], shot[512];
     int w, h, mode, hide_hud, use_table, paused, shot_after, show_help, no_text, shot_game_frame, frames_limit, mouse_x, mouse_y, mouse_set, trigger_set, ruler;
+    double vscale, sdiag, sdist;
     double yaw, pitch, dist, focus, focal;
 } Opts;
 
 static void die_usage(void) {
     fprintf(stderr, "usage: pbdesk --roms DIR (--ipc DIR | --state FILE) [--table T.json | --tables scene_tables.json] [--res WxH] [--yaw N] [--pitch N] [--dist N]\n"
-                    "              [--focus N] [--focal N] [--hide-hud] [--no-text] [--no-ruler | --ruler-all] [--shot out.ppm [--shot-after N | --shot-game-frame N]]\n");
+                    "              [--focus N] [--focal N] [--hide-hud] [--no-text] [--no-ruler | --ruler-all] [--viewport-scale K] [--screen-diag IN] [--screen-dist M] [--shot out.ppm [--shot-after N | --shot-game-frame N]]\n");
     exit(2);
 }
 
@@ -408,7 +411,7 @@ static void save_ppm(const char *path, int w, int h) {
 }
 
 int main(int argc, char **argv) {
-    Opts o; memset(&o, 0, sizeof o); o.w = 960; o.h = 600; o.mode = 1; o.use_table = 1; o.ruler = 1; o.pitch = 14; o.dist = 15; o.focus = 9; o.focal = 620; o.shot_after = 8;
+    Opts o; memset(&o, 0, sizeof o); o.w = 960; o.h = 600; o.mode = 1; o.use_table = 1; o.ruler = 1; o.vscale = 1.0; o.sdiag = 29.0; o.sdist = 0.9; o.pitch = 14; o.dist = 15; o.focus = 9; o.focal = 620; o.shot_after = 8;
     int yaw_given = 0; o.yaw = 0;
     for (int i = 1; i < argc; i++) {
         const char *a = argv[i]; const char *v = i + 1 < argc ? argv[i + 1] : NULL;
@@ -426,6 +429,9 @@ int main(int argc, char **argv) {
         else if (!strcmp(a, "--hide-hud")) o.hide_hud = 1;
         else if (!strcmp(a, "--no-text")) o.no_text = 1;
         else if (!strcmp(a, "--no-ruler")) o.ruler = 0;
+        else if (!strcmp(a, "--viewport-scale") && i + 1 < argc) o.vscale = atof(argv[++i]);
+        else if (!strcmp(a, "--screen-diag") && i + 1 < argc) o.sdiag = atof(argv[++i]);
+        else if (!strcmp(a, "--screen-dist") && i + 1 < argc) o.sdist = atof(argv[++i]);
         else if (!strcmp(a, "--ruler-all")) o.ruler = 2;
         else if (!strcmp(a, "--shot-game-frame") && v) { o.shot_game_frame = atoi(v); i++; }                 /* screenshot once the game reaches this frame */
         else if (!strcmp(a, "--frames") && v) { o.frames_limit = atoi(v); i++; }                       /* test: quit after N frames */
@@ -495,6 +501,8 @@ int main(int argc, char **argv) {
                 case SDLK_1: o.mode = 1; break;
                 case SDLK_2: o.mode = 2; break;
                 case SDLK_h: o.hide_hud = !o.hide_hud; break;
+                case SDLK_LEFTBRACKET: o.vscale /= 1.1; dirty = 1; break;                  /* smaller / bigger viewport */
+                case SDLK_RIGHTBRACKET: o.vscale *= 1.1; dirty = 1; break;
                 case SDLK_m: o.ruler = (o.ruler + 1) % 3; break;                           /* off / main layers / every depth group */
                 case SDLK_t: o.use_table = !o.use_table; dirty = 1; break;
                 case SDLK_r: if (tset) { Nb1TableSet *nt = nb1_tableset_load(o.tables); if (nt) { nb1_tableset_free(tset); tset = nt; dirty = 1; } else fprintf(stderr, "pbdesk: tables reload failed\n"); }
@@ -530,6 +538,9 @@ int main(int argc, char **argv) {
 
         /* new game state? */
         if (!o.paused) { unsigned fr = 0; Nb1State *ns = poll_state(&src, &fr); if (ns) { free(cur); cur = ns; game_frame = fr; dirty = 1; } }
+        /* physical viewport: width W at distance D shows the 288 px picture, so one px subtends W/(288 D) and the arcade eye's f = 346 becomes f_eff = 288 D / W */
+        const double vw_m = o.sdiag * 0.0254 * 0.8 * o.vscale, feff = NB1_W * o.sdist / vw_m, zs = feff / NB1_FOCAL, fov = 2 * atan(vw_m / (2 * o.sdist)) * 180 / M_PI;
+        if (gs.zs != zs) { gs.zs = zs; dirty = 1; }
         if (dirty && cur) {
             Uint64 t0 = SDL_GetPerformanceCounter();
             const Nb1Table *use = deftab; table_name = NULL;
@@ -562,8 +573,10 @@ int main(int argc, char **argv) {
             double u = mx * pxscale + 0.5 - vx, v = my * pxscale + 0.5 - vy, d[3];
             double a = (u - vw / 2.0) / cam.f, b = (vh / 2.0 - v) / cam.f;
             for (int k = 0; k < 3; k++) d[k] = a * cam.right[k] + b * cam.up[k] + cam.fwd[k];
+            const double zi = o.mode == 1 ? 1.0 : zs, Ei[3] = { cam.E[0], cam.E[1], cam.E[2] / zi };      /* physical -> authored coordinates */
+            d[2] /= zi;
             Nb1AimSnap r;
-            if (!nb1_aim_snap(&gs.scene, gs.ids, cam.E, d, 24.0, &r))
+            if (!nb1_aim_snap(&gs.scene, gs.ids, Ei, d, 24.0, &r))
                 snprintf(aim_txt, sizeof aim_txt, "aim: no hit, keeping last pixel (%5.1f,%5.1f)   [scene frame %u]", sx, sy, shown_frame);
             else {
                 const Nb1Item *it = &gs.scene.items[r.a.item];
@@ -571,11 +584,11 @@ int main(int argc, char **argv) {
                 if (r.hidden) {
                     sx = r.a.sx; sy = r.a.sy;
                     const Nb1Item *cv = r.cover >= 0 ? &gs.scene.items[r.cover] : NULL;
-                    snprintf(aim_txt, sizeof aim_txt, "aim HIDDEN: %s%d z=%.1f is covered here; shot lands on %s%d (%5.1f,%5.1f)", kn, it->id, it->z,
+                    snprintf(aim_txt, sizeof aim_txt, "aim HIDDEN: %s%d z=%.1f is covered here; shot lands on %s%d (%5.1f,%5.1f)", kn, it->id, it->z * zi,
                              cv ? (cv->kind == NB1_TILEMAP ? "tilemap" : "sprite") : "nothing", cv ? cv->id : 0, sx, sy);
                 } else {
                     sx = r.a.sx; sy = r.a.sy;
-                    snprintf(aim_txt, sizeof aim_txt, "aim px (%5.1f,%5.1f) hits %s%d%s%s z=%.1f%s   [scene frame %u]", sx, sy, kn, it->id, it->has_part ? ":" : "", it->has_part ? it->part : "", it->z,
+                    snprintf(aim_txt, sizeof aim_txt, "aim px (%5.1f,%5.1f) hits %s%d%s%s z=%.1f%s   [scene frame %u]", sx, sy, kn, it->id, it->has_part ? ":" : "", it->has_part ? it->part : "", it->z * zi,
                              r.snapped ? "  SNAPPED" : "", shown_frame);
                 }
             }
@@ -590,7 +603,7 @@ int main(int argc, char **argv) {
         if (gs.loaded) {
             glViewport(vx, vy, vw, vh); glEnable(GL_SCISSOR_TEST); glScissor(vx, vy, vw, vh);
             glClearColor(0, 0, 0, 1); glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-            float mvp[16]; make_mvp(&cam, vw, vh, mvp);
+            float mvp[16]; make_mvp(&cam, vw, vh, o.mode == 1 ? 1.0 : zs, mvp);
             glEnable(GL_DEPTH_TEST); glDepthFunc(GL_LEQUAL); glDepthMask(GL_TRUE); glDisable(GL_BLEND); glDisable(GL_CULL_FACE);
             glUseProgram(prog); glUniformMatrix4fv(uMVP, 1, GL_FALSE, mvp); glUniform1i(uTex, 0); glBindVertexArray(vao);
             for (int pass = 0; pass < 2; pass++) {
@@ -615,12 +628,12 @@ int main(int argc, char **argv) {
                 glBindVertexArray(vao4); glUniform1i(uMode, 4);
                 for (int li = 0; li < gs.nlabels; li++) {
                     const Label *l = &gs.labels[li]; if ((o.hide_hud && l->hud) || l->ruler >= rlimit) continue;
-                    double dx = l->pos[0] - cam.E[0], dy = l->pos[1] - cam.E[1], dz = l->pos[2] - cam.E[2], dist = sqrt(dx * dx + dy * dy + dz * dz);
+                    const double lz = l->pos[2] * zs; double dx = l->pos[0] - cam.E[0], dy = l->pos[1] - cam.E[1], dz = lz - cam.E[2], dist = sqrt(dx * dx + dy * dy + dz * dz);
                     double hh = 17.0 * dist / cam.f, ww_ = hh * l->tw / l->th;                     /* about 17 px tall on screen */
                     double x0 = l->right_align ? -ww_ : 0.0, x1 = x0 + ww_, y0 = l->right_align ? -hh / 2 : 0.0, y1 = y0 + hh; Vtx q[6]; double cx_[4] = { x0, x1, x1, x0 }, cy_[4] = { y1, y1, y0, y0 };
                     static const float uvq[4][2] = { { 0, 0 }, { 1, 0 }, { 1, 1 }, { 0, 1 } }; Vtx c4[4];
                     for (int k = 0; k < 4; k++) { c4[k] = (Vtx){ (float)(l->pos[0] + cam.right[0] * cx_[k] + cam.up[0] * cy_[k]), (float)(l->pos[1] + cam.right[1] * cx_[k] + cam.up[1] * cy_[k]),
-                                                               (float)(l->pos[2] + cam.right[2] * cx_[k] + cam.up[2] * cy_[k]), uvq[k][0], uvq[k][1] }; }
+                                                               (float)(lz + cam.right[2] * cx_[k] + cam.up[2] * cy_[k]), uvq[k][0], uvq[k][1] }; }
                     q[0] = c4[0]; q[1] = c4[1]; q[2] = c4[2]; q[3] = c4[0]; q[4] = c4[2]; q[5] = c4[3];
                     glBindBuffer(GL_ARRAY_BUFFER, vbo4); glBufferData(GL_ARRAY_BUFFER, sizeof q, q, GL_STREAM_DRAW);
                     glBindTexture(GL_TEXTURE_2D, l->tex); glDrawArrays(GL_TRIANGLES, 0, 6);
@@ -633,7 +646,7 @@ int main(int argc, char **argv) {
         if (!o.no_text) {
             char l1[256], l2[640]; const char *tn = !o.use_table ? "off (auto depth)" : (o.table[0] ? strrchr(o.table, '/') ? strrchr(o.table, '/') + 1 : o.table : (table_name ? table_name : "default"));
             snprintf(l1, sizeof l1, "%s  yaw %.1f pitch %.1f dist %.1f focus %.1f   game frame %u  build %.0f ms%s", o.mode == 1 ? "ARCADE" : "ORBIT", o.yaw, o.pitch, o.dist, o.focus, shown_frame, build_ms, o.paused ? "  PAUSED" : "");
-            snprintf(l2, sizeof l2, "table: %s   F1 help", tn);
+            snprintf(l2, sizeof l2, "table: %s   viewport %.2f m at %.2f m (%.1f deg, x%.2f, [ ] to change)  depth x%.2f   F1 help", tn, vw_m, o.sdist, fov, o.vscale, zs);
             const char *help[] = { "1 arcade view  2 orbit  A/D yaw  W/S pitch  Q/E distance  Z/X focus  right-drag or Alt+drag orbit  wheel distance",
                                    "H hide HUD  M metre rulers off/main/all (orbit view)  T table on/off  R reload table  P pause  F5 screenshot  ESC quit   C coin  V start  left mouse = trigger" };
             int lines = 3 + (o.show_help ? 2 : 0), bh = lines * 15 + 4, bw = ww < 1100 ? ww : 1100; uint8_t *buf = calloc((size_t)bw * bh, 4);
