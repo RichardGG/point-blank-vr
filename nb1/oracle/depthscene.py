@@ -29,11 +29,11 @@ def project_arcade(p):
 
 class Item:
     __slots__ = ('kind', 'id', 'pri', 'order', 'x0', 'y0', 'w', 'h', 'tex', 'key', 'pal', 'ncols', 'nrows',
-                 'z', 'tilt_x', 'tilt_y', 'hud', 'rule', 'pen', 'rgb', 'shadow', 'listidx', 'erased', 'cust', 'part', 'name', 'zoom', 'plane')
+                 'z', 'tilt_x', 'tilt_y', 'hud', 'rule', 'pen', 'rgb', 'shadow', 'listidx', 'erased', 'cust', 'part', 'name', 'zoom', 'plane', 'decal')
     def __init__(self, **k):
         for s in self.__slots__: setattr(self, s, k.get(s))
         self.z = k.get('z', 0.0); self.tilt_x = k.get('tilt_x', 0.0); self.tilt_y = k.get('tilt_y', 0.0)
-        self.hud = k.get('hud', False)
+        self.hud = k.get('hud', False); self.decal = bool(k.get('decal', False))
     def corners(self):
         """Centre, half-width vector, half-height vector of the quad in world space (tilt about its own centre)."""
         ctr = unproject(self.x0 + self.w / 2.0, self.y0 + self.h / 2.0, self.z)
@@ -47,6 +47,12 @@ class Item:
         return ctr, r, u
 
 # ------------------------------------------------------------------ depth table
+# Decals: sprites that are drawn ONTO whatever is underneath (shot marks).  They take their depth, plane and tilt from the item the
+# arcade drew them over, so a bullet hole lies on the surface it hit.  Table key "decals": [[lo, hi], ...] (sprite tile codes);
+# omitted = the default shot-mark tiles; [] = none.  Decals never block the aim or the visible map.
+DEFAULT_DECALS = [[0xee5, 0xee7]]
+DECAL_EPS = 0.002
+
 DEFAULT_TABLE = {
     "defaults": {"z_front": 4.0, "z_back": 14.0, "hud_z": 2.0, "slot_gap": 0.0005},
     "rules": [
@@ -116,6 +122,33 @@ def assign_depths(items, table=DEFAULT_TABLE):
         if id(it) not in explicit and it.z >= floor:
             it.z = floor - d['slot_gap']
         floor = min(floor, it.z)
+    return items
+
+def apply_decals(items, table=DEFAULT_TABLE):
+    ranges = table.get('decals', DEFAULT_DECALS)
+    d = table.get('defaults', DEFAULT_TABLE['defaults'])
+    for m in items:
+        if m.kind != 'sprite' or m.key is None or not any(lo <= m.key <= hi for lo, hi in ranges): continue
+        m.decal = True
+        cx, cy = int(math.floor(m.x0 + m.w / 2.0)), int(math.floor(m.y0 + m.h / 2.0))
+        if not (0 <= cx < W and 0 <= cy < H): continue
+        owner = None                  # what the arcade drew it over: the latest-drawn opaque non-decal item before it at its centre
+        for o in items:
+            if o is m or o.kind == 'mask' or o.order >= m.order or (o.kind == 'sprite' and o.key is not None and any(lo <= o.key <= hi for lo, hi in ranges)): continue
+            ox, oy = cx - o.x0, cy - o.y0
+            if 0 <= ox < o.w and 0 <= oy < o.h and o.pen[oy, ox] >= 0 and (owner is None or o.order > owner.order): owner = o
+        if owner is None: continue
+        m.hud = owner.hud; m.tilt_x = owner.tilt_x; m.tilt_y = owner.tilt_y; m.plane = owner.plane
+        ray = unproject(m.x0 + m.w / 2.0, m.y0 + m.h / 2.0, 1.0)
+        if owner.hud:
+            m.z = owner.z - DECAL_EPS
+        elif owner.plane is not None:
+            n, dd = owner.plane; den = float(ray @ n)
+            m.z = float(-(ray * (dd / den))[2]) - DECAL_EPS if abs(den) > 1e-9 and dd / den > 0 else owner.z - DECAL_EPS
+        else:
+            ctr, r, u = owner.corners(); n = np.cross(r, u); den = float(ray @ n)
+            t = float((ctr @ n) / den) if abs(den) > 1e-12 else -1.0
+            m.z = (t if t > 0 else owner.z) - DECAL_EPS
     return items
 
 
@@ -340,7 +373,7 @@ def build_items(st, st_sprites, roms, table=DEFAULT_TABLE, apply_erase=True):
     cr = [(int(st.pal[0x1800 + 2 * k]) << 8) | int(st.pal[0x1801 + 2 * k]) for k in range(4)]
     wx0, wx1 = max(R.s(cr[0], 16) - 0x4a, 0), min(R.s(cr[1], 16) - 0x4a - 1, W - 1)
     wy0, wy1 = max(R.s(cr[2], 16) - 0x21, 0), min(R.s(cr[3], 16) - 0x21 - 1, H - 1)
-    items = assign_depths(items, table)
+    items = apply_decals(assign_depths(items, table), table)
     if (wx0, wy0, wx1, wy1) != (0, 0, W - 1, H - 1):
         pen = np.full((H, W), -3, np.int32)
         pen[wy0:wy1 + 1, wx0:wx1 + 1] = -1
@@ -428,11 +461,11 @@ def render_cam(items, E, fwd, right, up, f, size, ids=None):
         front = ok & (t < rz + 1e-9)                       # ties (coplanar art) go to the item the arcade draws later
         idx = front & (p >= 0)
         rp[idx] = p[idx]; rc[idx] = rgb[p[idx] & 0x1fff]; rz[idx] = t[idx]
-        if ids is not None: ids[y0:y1, x0:x1][idx] = index[id(it)]
+        if ids is not None and not it.decal: ids[y0:y1, x0:x1][idx] = index[id(it)]
         if it.cust is not None:
             cm = front & (p == -4)
             rp[cm] = -4; rc[cm] = it.cust[ty, tx][cm]; rz[cm] = t[cm]
-            if ids is not None: ids[y0:y1, x0:x1][cm] = index[id(it)]
+            if ids is not None and not it.decal: ids[y0:y1, x0:x1][cm] = index[id(it)]
         blk = front & (p == -3)
         rp[blk] = -1; rc[blk] = 0; rz[blk] = t[blk]
         if ids is not None: ids[y0:y1, x0:x1][blk] = -1
@@ -503,7 +536,7 @@ def aim(items, O, Dv, fallback_z=None, fallback=True):
     O = np.asarray(O, float); Dv = np.asarray(Dv, float)
     best = None
     for it in items:
-        if it.kind == 'mask': continue
+        if it.kind == 'mask' or it.decal: continue
         h = ray_item(it, O, Dv)
         if h is None: continue
         t, tx, ty = h

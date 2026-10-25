@@ -56,7 +56,7 @@ typedef struct {
     uint8_t *tex; int32_t *pen;
     int has_key, key, pal, ncols, nrows;
     double z, tilt_x, tilt_y; int hud, rule, shadow, listidx, erased; double zoom;
-    int has_plane; double pn[3], pd;
+    int has_plane; double pn[3], pd; int decal; /* drawn onto the item beneath (shot marks): never blocks aim or the visible map */
     /* derived by nb1_scene_prepare */
     double ctr[3], r[3], u[3], nrm[3], rr, uu;
 } Nb1Item;

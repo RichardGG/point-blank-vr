@@ -30,6 +30,7 @@ typedef struct {
 } Rule;
 struct Nb1Table {
     double far, z_front, z_back, hud_z, slot_gap; int nrules; Rule *rules; int ignored_edits;
+    int ndecals; int decal_lo[16], decal_hi[16];     /* sprite tile-code ranges drawn as decals */
 };
 
 static int num_list(const Json *j, int *out, int max) {
@@ -39,7 +40,8 @@ static int num_list(const Json *j, int *out, int max) {
     return n;
 }
 static Nb1Table *table_alloc(void) {
-    Nb1Table *t = calloc(1, sizeof *t); t->far = 80; t->z_front = 4; t->z_back = 14; t->hud_z = 2; t->slot_gap = 0.0005; return t;
+    Nb1Table *t = calloc(1, sizeof *t); t->far = 80; t->z_front = 4; t->z_back = 14; t->hud_z = 2; t->slot_gap = 0.0005;
+    t->ndecals = 1; t->decal_lo[0] = 0xee5; t->decal_hi[0] = 0xee7; return t;
 }
 Nb1Table *nb1_table_default(void) {
     Nb1Table *t = table_alloc(); t->rules = calloc(1, sizeof(Rule)); t->nrules = 1;
@@ -59,6 +61,11 @@ Nb1Table *nb1_table_load(const char *path) {
         if ((v = json_get(d, "z_back"))) t->z_back = v->num;
         if ((v = json_get(d, "hud_z"))) t->hud_z = v->num;
         if ((v = json_get(d, "slot_gap"))) t->slot_gap = v->num;
+    }
+    const Json *dc = json_get(j, "decals");
+    if (dc && dc->t == J_ARR) {
+        t->ndecals = 0;
+        for (int i = 0; i < dc->n && i < 16; i++) if (dc->kid[i]->n >= 2) { t->decal_lo[t->ndecals] = (int)dc->kid[i]->kid[0]->num; t->decal_hi[t->ndecals++] = (int)dc->kid[i]->kid[1]->num; }
     }
     const Json *ed = json_get(j, "edits"); if (ed && ed->t == J_ARR) t->ignored_edits = ed->n;
     const Json *rs = json_get(j, "rules");
@@ -161,6 +168,43 @@ static void assign_depths(Nb1Item *items, int n, const Nb1Table *tab) {
     free(ord); free(explicit_);
 }
 
+static void item_corners(const Nb1Item *it, double ctr[3], double r[3], double u[3]);
+/* Decals (shot marks) lie on whatever the arcade drew them over: they inherit that item's plane, tilt and depth. */
+#define DECAL_EPS 0.002
+static int is_decal_code(const Nb1Table *tab, const Nb1Item *it) {
+    if (it->kind != NB1_SPRITE || !it->has_key) return 0;
+    for (int k = 0; k < tab->ndecals; k++) if (tab->decal_lo[k] <= it->key && it->key <= tab->decal_hi[k]) return 1;
+    return 0;
+}
+static void apply_decals(Nb1Item *items, int n, const Nb1Table *tab) {
+    for (int a = 0; a < n; a++) {
+        Nb1Item *m = &items[a]; if (!is_decal_code(tab, m)) continue;
+        m->decal = 1;
+        int cx = (int)floor(m->x0 + m->w / 2.0), cy = (int)floor(m->y0 + m->h / 2.0);
+        if (!(cx >= 0 && cx < NB1_W && cy >= 0 && cy < NB1_H)) continue;
+        Nb1Item *owner = NULL;
+        for (int b = 0; b < n; b++) {
+            Nb1Item *o = &items[b];
+            if (b == a || o->kind == NB1_MASK || o->order >= m->order || is_decal_code(tab, o)) continue;
+            int ox = cx - o->x0, oy = cy - o->y0;
+            if (ox >= 0 && ox < o->w && oy >= 0 && oy < o->h && o->pen[(size_t)oy * o->w + ox] >= 0 && (!owner || o->order > owner->order)) owner = o;
+        }
+        if (!owner) continue;
+        m->hud = owner->hud; m->tilt_x = owner->tilt_x; m->tilt_y = owner->tilt_y; m->has_plane = owner->has_plane;
+        memcpy(m->pn, owner->pn, sizeof m->pn); m->pd = owner->pd;
+        double ray[3]; unproject(m->x0 + m->w / 2.0, m->y0 + m->h / 2.0, 1.0, ray);
+        if (owner->hud) m->z = owner->z - DECAL_EPS;
+        else if (owner->has_plane) {
+            double den = dot(ray, owner->pn);
+            m->z = (fabs(den) > 1e-9 && owner->pd / den > 0) ? -(ray[2] * (owner->pd / den)) - DECAL_EPS : owner->z - DECAL_EPS;
+        } else {
+            double ctr[3], r[3], u[3], nn[3]; item_corners(owner, ctr, r, u); cross(r, u, nn);
+            double den = dot(ray, nn), t = fabs(den) > 1e-12 ? dot(ctr, nn) / den : -1.0;
+            m->z = (t > 0 ? t : owner->z) - DECAL_EPS;
+        }
+    }
+}
+
 /* ---------------------------------------------------------------- erasers */
 static void apply_erasers(Nb1Item *items, int n) {
     int *spr = malloc(n * sizeof *spr), ns = 0;
@@ -238,6 +282,7 @@ int nb1_build_scene(const Nb1State *st, const Nb1State *sst, const Nb1Roms *roms
     wy0 = ((cr[2] & 0x8000) ? (cr[2] - 65536) : cr[2]) - 0x21; if (wy0 < 0) wy0 = 0;
     wy1 = ((cr[3] & 0x8000) ? (cr[3] - 65536) : cr[3]) - 0x21 - 1; if (wy1 > NB1_H - 1) wy1 = NB1_H - 1;
     assign_depths(items, n, tab);
+    apply_decals(items, n, tab);
     if (wx0 != 0 || wy0 != 0 || wx1 != NB1_W - 1 || wy1 != NB1_H - 1) {
         Nb1Item *it = &items[n]; it->kind = NB1_MASK; it->id = -1; it->pri = 8; it->order = 1000000; it->w = NB1_W; it->h = NB1_H;
         it->tex = calloc(NB1_W * NB1_H, 4); it->pen = malloc(NB1_W * NB1_H * 4); it->rule = -1; it->hud = 1; it->ncols = 36; it->nrows = 28;
@@ -341,7 +386,7 @@ static void draw_item(const Nb1Scene *s, int item_index, const Nb1Item *it, cons
             continue;
         }
         if (!(t < zb[k] + 1e-9)) continue;
-        if (p >= 0) { pen[k] = p; const uint8_t *q = s->rgb[p & 0x1fff]; col[k * 3] = q[0]; col[k * 3 + 1] = q[1]; col[k * 3 + 2] = q[2]; zb[k] = t; if (ids) ids[k] = item_index; }
+        if (p >= 0) { pen[k] = p; const uint8_t *q = s->rgb[p & 0x1fff]; col[k * 3] = q[0]; col[k * 3 + 1] = q[1]; col[k * 3 + 2] = q[2]; zb[k] = t; if (ids && !it->decal) ids[k] = item_index; }
         else if (p == -3) { pen[k] = -1; col[k * 3] = col[k * 3 + 1] = col[k * 3 + 2] = 0; zb[k] = t; if (ids) ids[k] = -1; }
     }
 }
@@ -366,7 +411,7 @@ void nb1_visible_map(const Nb1Scene *s, int32_t *ids) {
 int nb1_aim(const Nb1Scene *s, const double O[3], const double D[3], double fallback_z, Nb1Aim *out) {
     int best = -1; double bt = 0, P[3];
     for (int i = 0; i < s->n; i++) {
-        const Nb1Item *it = &s->items[i]; if (it->kind == NB1_MASK) continue;
+        const Nb1Item *it = &s->items[i]; if (it->kind == NB1_MASK || it->decal) continue;
         double t; int tx, ty;
         if (!hit_ray(it, s->far, O, D, &t, &tx, &ty)) continue;
         if (it->tex[((size_t)ty * it->w + tx) * 4 + 3] == 0) continue;

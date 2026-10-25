@@ -64,7 +64,7 @@ for T in frames:
                 good = [int(float(v)) for v in r[1:13]] == [int(x) for x in ints]
                 good &= abs(float(r[13]) - it.z) < 1e-9 and abs(float(r[14]) - it.tilt_x) < 1e-12 and abs(float(r[15]) - it.tilt_y) < 1e-12
                 good &= int(r[16]) == int(bool(it.hud)) and int(r[17]) == (-1 if it.rule is None else it.rule)
-                good &= int(r[18]) == int(bool(it.shadow)) and int(r[19]) == int(it.erased or 0) and int(r[21]) == int(it.plane is not None)
+                good &= int(r[18]) == int(bool(it.shadow)) and int(r[19]) == int(it.erased or 0) and int(r[21]) == int(it.plane is not None) and int(r[22]) == int(bool(it.decal))
                 if kind == 1: good &= abs(float(r[20]) - it.zoom) < 1e-12
                 tex = rd(f'tex_{i:03d}.rgba', np.uint8, (it.h, it.w, 4)); pen = rd(f'pen_{i:03d}.i32', np.int32, (it.h, it.w))
                 good &= (tex == it.tex).all() and (pen == it.pen).all()

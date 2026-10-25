@@ -42,9 +42,9 @@ static int dump(int argc, char **argv) {
     f = fopenf(out, "items.tsv", "w");
     for (int i = 0; i < sc.n; i++) {
         const Nb1Item *it = &sc.items[i];
-        fprintf(f, "%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%.17g\t%.17g\t%.17g\t%d\t%d\t%d\t%d\t%.17g\t%d\n", i, it->kind, it->id, it->pri, it->order,
+        fprintf(f, "%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%.17g\t%.17g\t%.17g\t%d\t%d\t%d\t%d\t%.17g\t%d\t%d\n", i, it->kind, it->id, it->pri, it->order,
                 it->x0, it->y0, it->w, it->h, it->has_key ? it->key : -1, it->pal, it->ncols, it->nrows, it->z, it->tilt_x, it->tilt_y, it->hud, it->rule, it->shadow, it->erased,
-                it->zoom, it->has_plane);
+                it->zoom, it->has_plane, it->decal);
         char nm[64]; snprintf(nm, sizeof nm, "tex_%03d.rgba", i); put(out, nm, it->tex, (size_t)it->w * it->h * 4);
         snprintf(nm, sizeof nm, "pen_%03d.i32", i); put(out, nm, it->pen, (size_t)it->w * it->h * 4);
     }

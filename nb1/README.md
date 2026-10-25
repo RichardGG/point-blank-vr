@@ -43,3 +43,11 @@ where the hit item is visible to the arcade eye, flags `snapped` / `hidden` / `c
 caller keeps its last pixel). Measured on three scenes at yaw 20-85 degrees with random mouse rays: pixels where the hit item was visible to
 the game went from 76% (381 of 498 hits; e.g. 1100 yaw 70: 62 of 83) to 98% (489 of 498); the rest are items fully covered or more than 24 px from a visible pixel.
 Checked against the Python `aim_snap` (2,700 rays x 3 frames x 3 tables) and its id map (0 px differ).
+
+## Decals (shot marks)
+Sprites whose tile code is in the table's `"decals": [[lo, hi], ...]` (default: the shot-mark tiles 0xee5-0xee7, a 16x16 blob that grows
+into a sparkle, seen 2/5/8 frames after the trigger in 86 of 265 traced shots) are placed ON the item the arcade drew them over:
+the latest-drawn opaque non-decal item under their centre pixel. They inherit its plane, tilt and HUD flag, and their depth is
+where the eye ray through their centre meets that surface (2 mm in front). Decals never block `nb1_aim` or the visible map. `"decals": []` turns it off.
+Other hit effects (e.g. tiles 4bd/4ba, f78/f8a/f81) were seen after some shots but have not been examined, so they are not decals yet.
+Checked: C == Python for 40 decal items (plane, upright and tilted owners); marks lie within 2 mm of the owner's plane with identical normals.
