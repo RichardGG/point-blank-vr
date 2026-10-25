@@ -408,7 +408,7 @@ int main(int argc, char **argv) {
     double sx = 144, sy = 112, last_aim_write = 0, fps_t = now_s(); int fps_n = 0; int running = 1;
     int shot_wait = 0;
     /* pause-mode editor state */
-    Panel panel; memset(&panel, 0, sizeof panel);
+    Panel panel, side_l, side_r; memset(&panel, 0, sizeof panel); memset(&side_l, 0, sizeof side_l); memset(&side_r, 0, sizeof side_r);
     int has_sel = 0, scope = 0, cur_scene = -1; double cur_sim = 0; Nb1ScaleSpec sel; SelItem sel_item; memset(&sel, 0, sizeof sel); memset(&sel_item, 0, sizeof sel_item);
     double jump = 0, last_t = now_s(); int prev_sq[2] = { 0, 0 }, prev_ba = 0, prev_bb = 0, prev_bx = 0, prev_by = 0, prev_seltrig = 0;
     int inj_sel = 0, inj_sq = 0, inj_a = 0, inj_b = 0, inj_x = 0, inj_y = 0, kb_ls = 0, kb_rs = 0, af = 0, shot_req = 0, shot_n = 0; const int autotest = getenv("PBVR_AUTOTEST") != NULL;   /* keyboard / scripted stand-ins for the controller buttons */
@@ -524,7 +524,11 @@ int main(int argc, char **argv) {
             if (af > 390 && af < 440) kb_ls = -1;
             if (af == 450) shot_req = 1;
             if (af == 460) inj_b = 1;
-            if (af == 470) { fprintf(stderr, "pbvr: autotest finished\n"); running = 0; }
+            if (af == 465) yaw0 -= 0.95;                                    /* "turn" left: the controls panel comes to the front */
+            if (af == 475) shot_req = 1;
+            if (af == 480) yaw0 += 1.9;                                     /* and right: the edits panel */
+            if (af == 490) shot_req = 1;
+            if (af == 500) { fprintf(stderr, "pbvr: autotest finished\n"); running = 0; }
         }
         /* ---- pause-mode editing */
         if (!paused) jump = 0;
@@ -577,8 +581,22 @@ int main(int argc, char **argv) {
             else snprintf(l, sizeof l, "Point at a layer and pull the trigger to select it");
             panel_set(&panel, 1, l);
             snprintf(l, sizeof l, "viewport x%.2f = %.2f m wide at %.2f m, depth x%.2f     %s", o.vscale, vw_m, o.sdist, zs, jump != 0 ? "JUMPED to the layer (real size)" : "at the playing area"); panel_set(&panel, 2, l);
-            panel_set(&panel, 3, "trigger: select   grip: layer / sprite type   left stick: scale layer   right stick: viewport size");
-            panel_set(&panel, 4, t < msg_until ? msg : "A: jump to layer / back   B: save   X: reset selected   Y: reset all   left stick click: resume");
+            panel_set(&panel, 3, t < msg_until ? msg : "");
+            /* controls on the left (turn your head left), this scene's edits on the right */
+            static const char *help[] = { "CONTROLS (paused)", "", "trigger          select a layer", "grip             layer / sprite type", "left stick       scale the layer", "                 (up = farther, bigger)",
+                                          "right stick      viewport size", "A                jump to layer / back", "B                save the edits", "X                reset selected", "Y                reset all of this scene", "left stick click resume the game" };
+            for (int i = 0; i < PANEL_LINES; i++) panel_set(&side_l, i, i < 12 ? help[i] : "");
+            int row = 0; char r[200];
+            snprintf(r, sizeof r, "EDITS IN SCENE #%d", cur_scene); panel_set(&side_r, row++, r); panel_set(&side_r, row++, "");
+            SDL_LockMutex(W.mu);
+            for (int i = 0; i < W.nov && row < PANEL_LINES - 2; i++) if (W.ov[i].scene == cur_scene) {
+                char d[80]; double zq = 0; spec_desc(&W.ov[i].s, d, sizeof d); group_z(&front, &W.ov[i].s, &zq);
+                snprintf(r, sizeof r, "%c %s  x%.2f  %.1f m", (has_sel && spec_same(&W.ov[i].s, &sel)) ? '>' : ' ', d, W.ov[i].s.k, zq * zs); panel_set(&side_r, row++, r);
+            }
+            SDL_UnlockMutex(W.mu);
+            if (row == 2) panel_set(&side_r, row++, "(none yet)");
+            { const char *s1 = strrchr(o.edits_out, '/'), *s2 = strrchr(o.edits_out, '\\'), *bn = s1 > s2 ? s1 : s2; snprintf(r, sizeof r, "B saves to %s", bn ? bn + 1 : o.edits_out); } panel_set(&side_r, row++, ""); panel_set(&side_r, row++, r);
+            while (row < PANEL_LINES) panel_set(&side_r, row++, "");
         }
         /* render */
         if (!o.no_vr) {
@@ -601,7 +619,9 @@ int main(int argc, char **argv) {
                             for (int k = 0; k < mm && nv < 30; k++) for (int q = 0; q < 2; q++) { double o3[3]; m4_point(s2p, Pq[(k + q) % mm], o3); seg[nv * 3] = (float)o3[0]; seg[nv * 3 + 1] = (float)o3[1]; seg[nv * 3 + 2] = (float)o3[2]; nv++; }
                             draw_lines(&gfx, &pv_, seg, nv, 1.0f, 0.85f, 0.1f);
                         }
-                        panel_draw(&gfx, &panel, &pv_, m4_yaw_pos(yaw0, origin), o.sdist, -(vw_m * 224.0 / 288.0) / 2 - 0.02, vw_m / 480.0);
+                        panel_draw(&gfx, &panel, &pv_, m4_yaw_pos(yaw0, origin), o.sdist, -(vw_m * 224.0 / 288.0) / 2 - 0.02, vw_m / 480.0, 0);
+                        panel_draw(&gfx, &side_l, &pv_, m4_yaw_pos(yaw0 + 0.95, origin), 1.0, 0.16, 0.0013, 1);       /* turn left: the controls */
+                        panel_draw(&gfx, &side_r, &pv_, m4_yaw_pos(yaw0 - 0.95, origin), 1.0, 0.16, 0.0013, 1);       /* turn right: this scene's edits */
                     }
                     if (have_ray) {                                                   /* laser and a small cross where it lands (physical coordinates) */
                         M4 pv_ = m4_mul(proj[e], m4_rigid_inverse(m4_from_pose(xr.views[e].pose)));

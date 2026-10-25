@@ -29,6 +29,8 @@ Pause the game (left stick click, or `P` on the mirror window), and the buttons 
 | B (right) | save the edits |
 | X (left) / Y (left) | reset the selected group / every edit of this scene |
 
+The controls are also listed on a panel to your left (turn your head left) and this scene's edits on a panel to your right.
+
 Keyboard stand-ins on the mirror window: Enter select, G scope, Up/Down scale, PageUp/PageDown viewport, J jump, S save, X, Y.
 
 Edits are kept per scene (the captured scene whose background art is nearest) and applied by the library as a table's `"scales": [{"match": {...}, "scale": k}]` (depth and plane distance times k, non-HUD items only; all matching entries multiply). Saving appends one line to `pbvr_layer_edits.jsonl` (`--edits-out`): the scene (table name, nearest scene number and similarity, game frame), the viewport settings, and for every edit the layer, its match, the scale, and the depth before and after in authored and real metres, plus a ready-to-paste `table_snippet`. `tools/merge_scales.py pbvr_layer_edits.jsonl --scene N --table T.json` writes the last save of scene N into the table (`--list` shows what was saved).

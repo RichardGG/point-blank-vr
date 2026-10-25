@@ -50,7 +50,7 @@ static OvEntry *ov_find(OvEntry *ov, int nov, int scene, const Nb1ScaleSpec *s) 
 }
 
 /* ---- text panel (head-up lines drawn in the world, in front of the arcade eye's frame) */
-#define PANEL_LINES 5
+#define PANEL_LINES 12
 typedef struct { char text[PANEL_LINES][200]; GLuint tex[PANEL_LINES]; int tw[PANEL_LINES], th[PANEL_LINES]; } Panel;
 static void panel_set(Panel *p, int i, const char *s) {
     if (!strcmp(p->text[i], s) && p->tex[i]) return;
@@ -58,14 +58,15 @@ static void panel_set(Panel *p, int i, const char *s) {
     snprintf(p->text[i], sizeof p->text[i], "%s", s); p->tex[i] = text_tex(s[0] ? s : " ", &p->tw[i], &p->th[i]);
 }
 /* frame = yaw/position of the arcade eye; the panel hangs below the picture, facing the eye; px = metres per text pixel */
-static void panel_draw(const Gfx *g, const Panel *p, const M4 *vp, M4 frame, double dist, double y_top, double px) {
+static void panel_draw(const Gfx *g, const Panel *p, const M4 *vp, M4 frame, double dist, double y_top, double px, int left_align) {
+    double maxw = 0; for (int i = 0; i < PANEL_LINES; i++) if (p->tex[i] && p->text[i][0] && p->tw[i] * px > maxw) maxw = p->tw[i] * px;
     float m[16]; for (int i = 0; i < 16; i++) m[i] = (float)vp->m[i];
     glDisable(GL_DEPTH_TEST); glDisable(GL_BLEND); glUseProgram(g->prog); glUniformMatrix4fv(g->uMVP, 1, GL_FALSE, m); glUniform1i(g->uTex, 0); glUniform1i(g->uMode, 4);
     glBindVertexArray(g->line_vao); glBindBuffer(GL_ARRAY_BUFFER, g->line_vbo);
     double y = y_top;
     for (int i = 0; i < PANEL_LINES; i++) {
         if (!p->tex[i] || !p->text[i][0]) continue;
-        double w = p->tw[i] * px, h = p->th[i] * px, x0 = -w / 2, x1 = w / 2, y1 = y, y0 = y - h; y = y0 - 0.004;
+        double w = p->tw[i] * px, h = p->th[i] * px, x0 = left_align ? -maxw / 2 : -w / 2, x1 = x0 + w, y1 = y, y0 = y - h; y = y0 - 0.004;
         double cx[4] = { x0, x1, x1, x0 }, cy[4] = { y1, y1, y0, y0 }; static const float uv[4][2] = { { 0, 0 }, { 1, 0 }, { 1, 1 }, { 0, 1 } }; Vtx c[4], q[6];
         for (int k = 0; k < 4; k++) { double v[3] = { cx[k], cy[k], -dist }, o[3]; m4_point(frame, v, o); c[k] = (Vtx){ (float)o[0], (float)o[1], (float)o[2], uv[k][0], uv[k][1] }; }
         q[0] = c[0]; q[1] = c[1]; q[2] = c[2]; q[3] = c[0]; q[4] = c[2]; q[5] = c[3];
