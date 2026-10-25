@@ -68,7 +68,7 @@ instead of by a library, because the libraries could not be reproduced bit-for-b
 `tests/make_assets.py` regenerates the synthetic PNGs in `tests/assets/` (no game content).
 
 ## Desktop viewer: `pbdesk`
-`make pbdesk` (needs SDL2 and OpenGL 3.3; on Debian/Ubuntu `apt install libsdl2-dev libgl-dev`) builds `nb1/pbdesk`, an SDL2 + OpenGL viewer for the live scene:
+`make pbdesk` (needs SDL2 and OpenGL 3.3: macOS `brew install sdl2`, Debian/Ubuntu `apt install libsdl2-dev libgl-dev`; the Makefile says so if SDL2 is missing) builds `nb1/pbdesk`, an SDL2 + OpenGL viewer for the live scene:
 one textured quad per item (planes are texture-mapped by projecting through the arcade eye in the fragment shader), an orbit camera, mouse-ray aim
 with the snapping, and the same aim protocol as the Python viewer, so it plugs into `tools/play/pbplay.py --viewer c --pbdesk nb1/pbdesk`
 in the research repo (MAME runs the game and publishes frames; pbdesk reads them and writes `aim.txt`). `--state FILE` shows a single saved state.

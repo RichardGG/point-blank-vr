@@ -14,8 +14,11 @@
  * approximation: sprite "shadow" pens (fades) are drawn as a plain 50% darkening here, not through the palette.
  */
 #include "../nb1.h"
-#include <SDL2/SDL.h>
-#include <SDL2/SDL_opengl.h>
+#ifdef __APPLE__
+#define GL_SILENCE_DEPRECATION
+#endif
+#include <SDL.h>
+#include <SDL_opengl.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -28,24 +31,61 @@
 #endif
 
 /* ---------------------------------------------------------------- GL function loading (shaders, buffers, VAOs) */
+#ifndef APIENTRY
+#define APIENTRY
+#endif
+/* Our own pointer types and names: the PFN typedefs and prototypes differ between the Linux, Windows and Apple headers. */
+typedef GLuint (APIENTRY *fn_CreateShader)(GLenum); typedef void (APIENTRY *fn_ShaderSource)(GLuint, GLsizei, const char *const *, const GLint *);
+typedef void (APIENTRY *fn_CompileShader)(GLuint); typedef void (APIENTRY *fn_GetShaderiv)(GLuint, GLenum, GLint *);
+typedef void (APIENTRY *fn_GetInfoLog)(GLuint, GLsizei, GLsizei *, char *); typedef GLuint (APIENTRY *fn_CreateProgram)(void);
+typedef void (APIENTRY *fn_AttachShader)(GLuint, GLuint); typedef void (APIENTRY *fn_LinkProgram)(GLuint);
+typedef void (APIENTRY *fn_GetProgramiv)(GLuint, GLenum, GLint *); typedef void (APIENTRY *fn_UseProgram)(GLuint);
+typedef GLint (APIENTRY *fn_GetUniformLocation)(GLuint, const char *); typedef void (APIENTRY *fn_Uniform1i)(GLint, GLint);
+typedef void (APIENTRY *fn_Uniform4f)(GLint, GLfloat, GLfloat, GLfloat, GLfloat); typedef void (APIENTRY *fn_UniformMatrix4fv)(GLint, GLsizei, GLboolean, const GLfloat *);
+typedef void (APIENTRY *fn_GenArrays)(GLsizei, GLuint *); typedef void (APIENTRY *fn_BindVertexArray)(GLuint);
+typedef void (APIENTRY *fn_BindBuffer)(GLenum, GLuint); typedef void (APIENTRY *fn_BufferData)(GLenum, GLsizeiptr, const void *, GLenum);
+typedef void (APIENTRY *fn_EnableVertexAttribArray)(GLuint); typedef void (APIENTRY *fn_VertexAttribPointer)(GLuint, GLint, GLenum, GLboolean, GLsizei, const void *);
+typedef void (APIENTRY *fn_DeleteShader)(GLuint);
 #define GL_FUNCS(X) \
-    X(PFNGLCREATESHADERPROC, glCreateShader) X(PFNGLSHADERSOURCEPROC, glShaderSource) X(PFNGLCOMPILESHADERPROC, glCompileShader) \
-    X(PFNGLGETSHADERIVPROC, glGetShaderiv) X(PFNGLGETSHADERINFOLOGPROC, glGetShaderInfoLog) X(PFNGLCREATEPROGRAMPROC, glCreateProgram) \
-    X(PFNGLATTACHSHADERPROC, glAttachShader) X(PFNGLLINKPROGRAMPROC, glLinkProgram) X(PFNGLGETPROGRAMIVPROC, glGetProgramiv) \
-    X(PFNGLGETPROGRAMINFOLOGPROC, glGetProgramInfoLog) X(PFNGLUSEPROGRAMPROC, glUseProgram) X(PFNGLGETUNIFORMLOCATIONPROC, glGetUniformLocation) \
-    X(PFNGLUNIFORM1IPROC, glUniform1i) X(PFNGLUNIFORM4FPROC, glUniform4f) X(PFNGLUNIFORMMATRIX4FVPROC, glUniformMatrix4fv) \
-    X(PFNGLGENVERTEXARRAYSPROC, glGenVertexArrays) X(PFNGLBINDVERTEXARRAYPROC, glBindVertexArray) X(PFNGLGENBUFFERSPROC, glGenBuffers) \
-    X(PFNGLBINDBUFFERPROC, glBindBuffer) X(PFNGLBUFFERDATAPROC, glBufferData) X(PFNGLENABLEVERTEXATTRIBARRAYPROC, glEnableVertexAttribArray) \
-    X(PFNGLVERTEXATTRIBPOINTERPROC, glVertexAttribPointer) X(PFNGLDELETESHADERPROC, glDeleteShader)
-#define X(T, N) static T N;
+    X(fn_CreateShader, glCreateShader) X(fn_ShaderSource, glShaderSource) X(fn_CompileShader, glCompileShader) X(fn_GetShaderiv, glGetShaderiv) \
+    X(fn_GetInfoLog, glGetShaderInfoLog) X(fn_CreateProgram, glCreateProgram) X(fn_AttachShader, glAttachShader) X(fn_LinkProgram, glLinkProgram) \
+    X(fn_GetProgramiv, glGetProgramiv) X(fn_GetInfoLog, glGetProgramInfoLog) X(fn_UseProgram, glUseProgram) X(fn_GetUniformLocation, glGetUniformLocation) \
+    X(fn_Uniform1i, glUniform1i) X(fn_Uniform4f, glUniform4f) X(fn_UniformMatrix4fv, glUniformMatrix4fv) X(fn_GenArrays, glGenVertexArrays) \
+    X(fn_BindVertexArray, glBindVertexArray) X(fn_GenArrays, glGenBuffers) X(fn_BindBuffer, glBindBuffer) X(fn_BufferData, glBufferData) \
+    X(fn_EnableVertexAttribArray, glEnableVertexAttribArray) X(fn_VertexAttribPointer, glVertexAttribPointer) X(fn_DeleteShader, glDeleteShader)
+#define X(T, N) static T pfn_##N;
 GL_FUNCS(X)
 #undef X
 static int load_gl(void) {
-#define X(T, N) N = (T)SDL_GL_GetProcAddress(#N); if (!N) { fprintf(stderr, "pbdesk: missing GL function %s\n", #N); return -1; }
+#define X(T, N) pfn_##N = (T)SDL_GL_GetProcAddress(#N); if (!pfn_##N) { fprintf(stderr, "pbdesk: missing GL function %s\n", #N); return -1; }
     GL_FUNCS(X)
 #undef X
     return 0;
 }
+/* from here on the plain names call our pointers (any header prototypes of the same names are no longer used) */
+#define glCreateShader pfn_glCreateShader
+#define glShaderSource pfn_glShaderSource
+#define glCompileShader pfn_glCompileShader
+#define glGetShaderiv pfn_glGetShaderiv
+#define glGetShaderInfoLog pfn_glGetShaderInfoLog
+#define glCreateProgram pfn_glCreateProgram
+#define glAttachShader pfn_glAttachShader
+#define glLinkProgram pfn_glLinkProgram
+#define glGetProgramiv pfn_glGetProgramiv
+#define glGetProgramInfoLog pfn_glGetProgramInfoLog
+#define glUseProgram pfn_glUseProgram
+#define glGetUniformLocation pfn_glGetUniformLocation
+#define glUniform1i pfn_glUniform1i
+#define glUniform4f pfn_glUniform4f
+#define glUniformMatrix4fv pfn_glUniformMatrix4fv
+#define glGenVertexArrays pfn_glGenVertexArrays
+#define glBindVertexArray pfn_glBindVertexArray
+#define glGenBuffers pfn_glGenBuffers
+#define glBindBuffer pfn_glBindBuffer
+#define glBufferData pfn_glBufferData
+#define glEnableVertexAttribArray pfn_glEnableVertexAttribArray
+#define glVertexAttribPointer pfn_glVertexAttribPointer
+#define glDeleteShader pfn_glDeleteShader
 
 static const char *VS =
     "#version 330 core\n"
@@ -314,7 +354,7 @@ int main(int argc, char **argv) {
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3); SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE); SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, SDL_GL_CONTEXT_FORWARD_COMPATIBLE_FLAG);
     SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24); SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
-    SDL_Window *win = SDL_CreateWindow("Point Blank depth viewer", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, o.w, o.h, SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE);
+    SDL_Window *win = SDL_CreateWindow("Point Blank depth viewer", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, o.w, o.h, SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
     if (!win) { fprintf(stderr, "pbdesk: window: %s\n", SDL_GetError()); return 1; }
     SDL_GLContext ctx = SDL_GL_CreateContext(win);
     if (!ctx) { fprintf(stderr, "pbdesk: OpenGL 3.3 context: %s\n", SDL_GetError()); return 1; }
