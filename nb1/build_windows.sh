@@ -14,7 +14,7 @@ SRC="nb1_video.c nb1_scene.c nb1_table.c nb1_edits.c nb1_png.c nb1_json.c"
 CF="-O2 -std=gnu11 -ffp-contract=off -Wall -Wno-missing-field-initializers -Wno-unused-function -Wno-unused-variable -I$ZLIB_INC -I$SDL2_MINGW/include/SDL2 -I$SDL2_MINGW/include -idirafter $OPENXR_INC"
 $CC $CF -o "$OUT/nb1_tool.exe" $SRC nb1_tool.c "$ZLIB_LIB" -lm
 for t in desktop/pbdesk:pbdesk vr/pbvr:pbvr; do
-  $CC $CF -o "$OUT/${t#*:}.exe" $SRC "${t%:*}.c" -L"$SDL2_MINGW/lib" -lmingw32 -lSDL2main -lSDL2 -lopengl32 "$ZLIB_LIB" -lm
+  $CC $CF -o "$OUT/${t#*:}.exe" $SRC "${t%:*}.c" -L"$SDL2_MINGW/lib" -lmingw32 -lSDL2main -lSDL2 -lopengl32 "$ZLIB_LIB" -lm -Wl,--stack,67108864
 done
 cp "$SDL2_MINGW/bin/SDL2.dll" "$OUT/" 2>/dev/null || echo "copy SDL2.dll next to the executables yourself"
 ls -l "$OUT"

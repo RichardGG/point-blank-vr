@@ -290,7 +290,19 @@ static void draw_lines(const Gfx *g, const M4 *mvp, const float *xyz, int nverts
 
 static double now_s(void) { return (double)SDL_GetPerformanceCounter() / (double)SDL_GetPerformanceFrequency(); }
 
+#ifdef _WIN32
+static LONG WINAPI crash_filter(EXCEPTION_POINTERS *e) {            /* a silent exit in PowerShell is hard to debug: say what happened */
+    fprintf(stderr, "\npbvr: CRASH, exception 0x%08lx%s at %p\n", (unsigned long)e->ExceptionRecord->ExceptionCode,
+            e->ExceptionRecord->ExceptionCode == 0xC00000FD ? " (stack overflow)" : e->ExceptionRecord->ExceptionCode == 0xC0000005 ? " (access violation)" : "", e->ExceptionRecord->ExceptionAddress);
+    if (e->ExceptionRecord->ExceptionCode == 0xC0000005 && e->ExceptionRecord->NumberParameters >= 2)
+        fprintf(stderr, "pbvr: %s address %p\n", e->ExceptionRecord->ExceptionInformation[0] ? "wrote" : "read", (void *)e->ExceptionRecord->ExceptionInformation[1]);
+    fflush(stderr); return EXCEPTION_EXECUTE_HANDLER;
+}
+#endif
 int main(int argc, char **argv) {
+#ifdef _WIN32
+    SetUnhandledExceptionFilter(crash_filter); setvbuf(stderr, NULL, _IONBF, 0);
+#endif
     Opts o; memset(&o, 0, sizeof o); o.vscale = 1; o.sdiag = 29; o.sdist = 0.9;
     for (int i = 1; i < argc; i++) {
         const char *a = argv[i], *v = i + 1 < argc ? argv[i + 1] : NULL;
@@ -341,7 +353,7 @@ int main(int argc, char **argv) {
     else if (o.tables[0]) { W.tset = nb1_tableset_load(o.tables); if (!W.tset) fprintf(stderr, "pbvr: cannot load tables %s\n", o.tables); }
     snprintf(W.src.ipc, sizeof W.src.ipc, "%s", o.ipc);
     double vw_m = o.sdiag * 0.0254 * 0.8 * o.vscale, zs = (NB1_W * o.sdist / vw_m) / NB1_FOCAL; W.zs = zs;
-    SDL_Thread *thr = SDL_CreateThread(worker_main, "scene", &W);
+    SDL_Thread *thr = SDL_CreateThreadWithStackSize(worker_main, "scene", 64 << 20, &W);   /* the scene builder keeps big buffers on the stack; Windows threads default to 1 MB */
 
     GlScene front; memset(&front, 0, sizeof front); front.zs = zs; unsigned shown_frame = 0; const char *table_name = NULL;
     double origin[3] = { 0, 0, 0 }, yaw0 = 0; int need_recenter = 1;
@@ -353,9 +365,9 @@ int main(int argc, char **argv) {
     while (running) {
         SDL_Event ev;
         while (SDL_PollEvent(&ev)) {
-            if (ev.type == SDL_QUIT) running = 0;
+            if (ev.type == SDL_QUIT) { fprintf(stderr, "pbvr: window closed\n"); running = 0; }
             else if (ev.type == SDL_KEYDOWN && !ev.key.repeat) switch (ev.key.keysym.sym) {
-                case SDLK_ESCAPE: running = 0; break;
+                case SDLK_ESCAPE: fprintf(stderr, "pbvr: ESC pressed\n"); running = 0; break;
                 case SDLK_c: kcoin = 1; break; case SDLK_v: kstart = 1; break;
                 case SDLK_p: paused = !paused; break; case SDLK_r: need_recenter = 1; break;
                 case SDLK_LEFTBRACKET: o.vscale /= 1.1; break; case SDLK_RIGHTBRACKET: o.vscale *= 1.1; break;
@@ -376,9 +388,9 @@ int main(int argc, char **argv) {
         double ray_o[3] = { 0, 0, 0 }, ray_d[3] = { 0, 0, -1 }; int have_ray = 0; double ctl_pos[3] = { 0, 0, 0 };
         XrFrameState fs = { XR_TYPE_FRAME_STATE };
         if (!o.no_vr) {
-            xr_events(&xr); if (xr.exit_requested) break;
+            xr_events(&xr); if (xr.exit_requested) { fprintf(stderr, "pbvr: the OpenXR session asked to exit\n"); break; }
             if (!xr.running) { SDL_Delay(20); continue; }
-            XrFrameWaitInfo wi = { XR_TYPE_FRAME_WAIT_INFO }; if (XR_FAILED(xrWaitFrame(xr.sess, &wi, &fs))) break;
+            XrFrameWaitInfo wi = { XR_TYPE_FRAME_WAIT_INFO }; { XrResult wr = xrWaitFrame(xr.sess, &wi, &fs); if (XR_FAILED(wr)) { fprintf(stderr, "pbvr: xrWaitFrame failed (%d), stopping\n", (int)wr); break; } }
             XrFrameBeginInfo bi = { XR_TYPE_FRAME_BEGIN_INFO }; xrBeginFrame(xr.sess, &bi);
             xr.pred = fs.predictedDisplayTime;
             /* input */
@@ -492,7 +504,7 @@ int main(int argc, char **argv) {
             fps_t = t; fps_n = 0;
         }
     }
-    W.quit = 1; SDL_WaitThread(thr, NULL);
+    fprintf(stderr, "pbvr: leaving the main loop\n"); W.quit = 1; SDL_WaitThread(thr, NULL);
     if (!o.no_vr && xr.sess) { xrDestroySession(xr.sess); xrDestroyInstance(xr.inst); }
     return 0;
 }
