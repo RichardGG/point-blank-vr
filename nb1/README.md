@@ -74,6 +74,7 @@ with the snapping, and the same aim protocol as the Python viewer, so it plugs i
 in the research repo (MAME runs the game and publishes frames; pbdesk reads them and writes `aim.txt`). `--state FILE` shows a single saved state.
 ROMs can be a folder or the MAME `ptblank.zip`. Keys are listed at the top of `desktop/pbdesk.c` (F1 in the window).
 Screenshots are PPM (`F5`, or `--shot out.ppm`).
+In orbit views each layer gets a metre ruler (ticks every 0.25 m, longer at 0.5 m and 1 m, labelled in metres, top label with layer, distance and height; red near to cyan far). `M` cycles rulers off / main / all; `--no-ruler`, `--ruler-all`.
 
 What was checked (headless, Mesa software OpenGL under Xvfb; nothing here was run on macOS or Windows):
 * Straight arcade view vs the library's software render: 0 of 64,512 px differ on all 8 frames tried (default, garden, corridor, tree, edits and rules stress tables).

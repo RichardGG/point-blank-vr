@@ -96,6 +96,7 @@ static const char *FS =
     "#version 330 core\n"
     "in vec3 vPos; in vec2 vUV; uniform sampler2D uTex; uniform int uMode; uniform vec4 uBox; out vec4 oCol;\n"
     "void main(){\n"
+    "  if (uMode == 3) { oCol = vec4(uBox.rgb, 1.0); return; }        /* ruler lines */\n"
     "  vec2 tc = vUV;\n"
     "  if (uMode == 1) {                       /* projected plane: texel = where the arcade eye sees this point */\n"
     "    float zc = -vPos.z; float u = 144.0 + 346.0 * vPos.x / zc; float v = 112.0 - 346.0 * vPos.y / zc;\n"
@@ -104,6 +105,7 @@ static const char *FS =
     "  }\n"
     "  vec4 t = texture(uTex, tc);\n"
     "  if (t.a < 0.002) discard;\n"
+    "  if (uMode == 4) { if (t.a < 0.5) discard; oCol = vec4(t.rgb, 1.0); return; }   /* ruler labels */\n"
     "  if (uMode == 2) oCol = vec4(0.5, 0.5, 0.5, 1.0); else oCol = vec4(t.rgb, 1.0);\n"
     "}\n";
 static const char *VS2 =
@@ -172,10 +174,14 @@ static Nb1State *poll_state(Source *s, unsigned *frame) {
 typedef struct { float x, y, z, u, v; } Vtx;
 typedef struct { int first, count, mode; GLuint tex, shadow_tex; int box[4]; } Draw;
 
+typedef struct { int first, count, hud; float col[3]; } Ruler;                       /* a ruler = a run of GL_LINES vertices */
+typedef struct { double pos[3]; int right_align, hud, ruler; GLuint tex; int tw, th; float tint[3]; } Label;   /* billboard text anchored in the world */
+
 typedef struct {
     Nb1Scene scene; int32_t *ids; int loaded;
     Draw *draws; int ndraws; Vtx *verts; int nverts, capverts;
     int *order;                      /* item indices sorted by arcade order */
+    Ruler *rulers; int nrulers; Vtx *rverts; int nrverts, caprverts; Label *labels; int nlabels;   /* metre rulers beside each depth layer */
 } GlScene;
 
 static void push_vtx(GlScene *g, double x, double y, double z, double u, double v) {
@@ -232,7 +238,90 @@ static GLuint make_tex(const uint8_t *rgba, int w, int h) {
     return t;
 }
 
+/* ---------------------------------------------------------------- metre rulers beside each depth layer */
+static void put_text_c(uint8_t *buf, int bw, int bh, int x, int y, const char *s, int r, int g, int b) {
+    for (; *s; s++, x += 7) {
+        int c = (unsigned char)*s; if (c < 32 || c > 126) continue;
+        for (int row = 0; row < 13; row++) for (int bit = 0; bit < 7; bit++) {
+            if (!(FONT7X13[c - 32][row] & (1 << (6 - bit)))) continue;
+            int px = x + bit, py = y + row; if (px < 0 || px >= bw || py < 0 || py >= bh) continue;
+            uint8_t *q = buf + ((size_t)py * bw + px) * 4; q[0] = (uint8_t)r; q[1] = (uint8_t)g; q[2] = (uint8_t)b; q[3] = 255;
+        }
+    }
+}
+static GLuint text_tex(const char *s, int *tw, int *th) {            /* white text with a black outline, on a transparent background */
+    int n = (int)strlen(s), w = n * 7 + 4, h = 17; uint8_t *buf = calloc((size_t)w * h, 4);
+    for (int dy = -1; dy <= 1; dy++) for (int dx = -1; dx <= 1; dx++) if (dx || dy) put_text_c(buf, w, h, 2 + dx, 2 + dy, s, 0, 0, 0);
+    put_text_c(buf, w, h, 2, 2, s, 255, 255, 255);
+    GLuint t = make_tex(buf, w, h); free(buf); *tw = w; *th = h; return t;
+}
+static void push_rvert(GlScene *g, double x, double y, double z) {
+    if (g->nrverts == g->caprverts) { g->caprverts = g->caprverts ? g->caprverts * 2 : 2048; g->rverts = realloc(g->rverts, g->caprverts * sizeof *g->rverts); }
+    g->rverts[g->nrverts++] = (Vtx){ (float)x, (float)y, (float)z, 0, 0 };
+}
+static void add_label(GlScene *g, double x, double y, double z, const char *text, int right_align, int hud, const float *tint) {
+    g->labels = realloc(g->labels, (g->nlabels + 1) * sizeof *g->labels); Label *l = &g->labels[g->nlabels++]; l->ruler = g->nrulers - 1;
+    l->pos[0] = x; l->pos[1] = y; l->pos[2] = z; l->right_align = right_align; l->hud = hud; l->tex = text_tex(text, &l->tw, &l->th); memcpy(l->tint, tint, sizeof l->tint);
+}
+
+typedef struct { int key, zb, n, hud, tilemap, id, pri; double zsum, xmin, ymin, ymax; long area; } Grp;
+
+static void build_rulers(GlScene *g) {
+    Grp grp[256]; int ng = 0;
+    for (int i = 0; i < g->scene.n; i++) {
+        const Nb1Item *it = &g->scene.items[i]; if (it->kind == NB1_MASK || it->decal || it->has_plane) continue;
+        double P[16][3]; if (item_polygon(it, g->scene.far, P) != 4) continue;
+        double xmin = 1e30, ymin = 1e30, ymax = -1e30, z = 0;
+        for (int k = 0; k < 4; k++) {
+            if (P[k][0] < xmin) xmin = P[k][0];
+            if (P[k][1] < ymin) ymin = P[k][1];
+            if (P[k][1] > ymax) ymax = P[k][1];
+            z += -P[k][2] / 4;
+        }
+        int tm = it->kind == NB1_TILEMAP, key = tm ? it->id : 100 + it->pri, zb = (int)floor(z / 0.25 + 0.5), f = -1;
+        for (int q = 0; q < ng; q++) if (grp[q].key == key && grp[q].zb == zb) { f = q; break; }
+        if (f < 0) {
+            if (ng == 256) continue;
+            f = ng++; grp[f] = (Grp){ key, zb, 0, 1, tm, tm ? it->id : 0, it->pri, 0, xmin, ymin, ymax, 0 };
+        }
+        Grp *q = &grp[f]; q->n++; q->zsum += z; q->area += (long)it->w * it->h; q->hud &= it->hud;
+        if (xmin < q->xmin) q->xmin = xmin;
+        if (ymin < q->ymin) q->ymin = ymin;
+        if (ymax > q->ymax) q->ymax = ymax;
+    }
+    int idx[256], ni = 0;                                              /* tilemap layers first (nearest last), then the biggest sprite groups */
+    for (int q = 0; q < ng; q++) if (grp[q].ymax - grp[q].ymin >= 0.3) idx[ni++] = q;
+    for (int a = 1; a < ni; a++) { int v = idx[a], b = a - 1;
+        while (b >= 0 && ((grp[idx[b]].tilemap < grp[v].tilemap) || (grp[idx[b]].tilemap == grp[v].tilemap && (grp[v].tilemap ? grp[idx[b]].zsum / grp[idx[b]].n < grp[v].zsum / grp[v].n : grp[idx[b]].area < grp[v].area)))) { idx[b + 1] = idx[b]; b--; }
+        idx[b + 1] = v; }
+    if (ni > 24) ni = 24;
+    double zmin = 1e30, zmax = -1e30;
+    for (int a = 0; a < ni; a++) { double z = grp[idx[a]].zsum / grp[idx[a]].n; if (z < zmin) zmin = z; if (z > zmax) zmax = z; }
+    g->rulers = calloc((size_t)(ni > 0 ? ni : 1), sizeof *g->rulers);
+    for (int a = 0; a < ni; a++) {
+        const Grp *q = &grp[idx[a]]; double z = q->zsum / q->n, H = q->ymax - q->ymin, x = q->xmin - 0.25;
+        int stack = 0; for (int b = 0; b < a; b++) if (fabs(grp[idx[b]].xmin - q->xmin) < 0.6) stack++;       /* rulers sharing a left edge step outwards */
+        x -= 0.22 * stack;
+        double k = zmax > zmin ? (z - zmin) / (zmax - zmin) : 0.0;                                     /* near = red, far = cyan */
+        Ruler *r = &g->rulers[g->nrulers++]; r->hud = q->hud; r->col[0] = (float)(1.0 - 0.7 * k); r->col[1] = (float)(0.35 + 0.55 * k); r->col[2] = (float)(0.3 + 0.7 * k);
+        r->first = g->nrverts;
+        int coarse = H > 12.0; double step = coarse ? 1.0 : 0.25;
+        push_rvert(g, x, q->ymin, -z); push_rvert(g, x, q->ymax, -z);                                   /* the spine, up to the layer height */
+        for (int t = 0; t * step <= H + 1e-9; t++) {
+            double v = t * step, len = (fabs(v - floor(v + 0.5)) < 1e-9) ? 0.32 : (fabs(v * 2 - floor(v * 2 + 0.5)) < 1e-9 ? 0.22 : 0.12);
+            push_rvert(g, x, q->ymin + v, -z); push_rvert(g, x + len, q->ymin + v, -z);
+            int whole = fabs(v - floor(v + 0.5)) < 1e-9, m = (int)floor(v + 0.5);
+            if (whole && m > 0 && (!coarse || m % 5 == 0)) { char b[16]; snprintf(b, sizeof b, "%dm", m); add_label(g, x - 0.04, q->ymin + v, -z, b, 1, r->hud, r->col); }
+        }
+        r->count = g->nrverts - r->first;
+        char name[40], text[80]; if (q->tilemap) snprintf(name, sizeof name, "L%d", q->id); else snprintf(name, sizeof name, "S%d x%d", q->pri, q->n);
+        snprintf(text, sizeof text, "%s  z=%.1fm  h=%.1fm", name, z, H); add_label(g, x, q->ymax + 0.12 + 0.34 * stack, -z, text, 0, r->hud, r->col);
+    }
+}
+
 static void gl_scene_free(GlScene *g) {
+    for (int i = 0; i < g->nlabels; i++) glDeleteTextures(1, &g->labels[i].tex);
+    free(g->labels); free(g->rulers); free(g->rverts);
     for (int i = 0; i < g->ndraws; i++) { if (g->draws[i].tex) glDeleteTextures(1, &g->draws[i].tex); if (g->draws[i].shadow_tex) glDeleteTextures(1, &g->draws[i].shadow_tex); }
     free(g->draws); free(g->verts); free(g->order); free(g->ids);
     if (g->loaded) nb1_scene_free(&g->scene);
@@ -267,6 +356,7 @@ static void gl_scene_build(GlScene *g, const Nb1State *st, const Nb1Roms *roms, 
             d->shadow_tex = make_tex(mk, it->w, it->h); free(mk);
         }
     }
+    build_rulers(g);
 }
 
 /* ---------------------------------------------------------------- matrices */
@@ -299,13 +389,13 @@ static void put_text(uint8_t *buf, int bw, int bh, int x, int y, const char *s) 
 /* ---------------------------------------------------------------- app */
 typedef struct {
     char roms[512], ipc[512], statefile[512], table[512], tables[512], shot[512];
-    int w, h, mode, hide_hud, use_table, paused, shot_after, show_help, no_text, shot_game_frame, frames_limit, mouse_x, mouse_y, mouse_set, trigger_set;
+    int w, h, mode, hide_hud, use_table, paused, shot_after, show_help, no_text, shot_game_frame, frames_limit, mouse_x, mouse_y, mouse_set, trigger_set, ruler;
     double yaw, pitch, dist, focus, focal;
 } Opts;
 
 static void die_usage(void) {
     fprintf(stderr, "usage: pbdesk --roms DIR (--ipc DIR | --state FILE) [--table T.json | --tables scene_tables.json] [--res WxH] [--yaw N] [--pitch N] [--dist N]\n"
-                    "              [--focus N] [--focal N] [--hide-hud] [--no-text] [--shot out.ppm [--shot-after N | --shot-game-frame N]]\n");
+                    "              [--focus N] [--focal N] [--hide-hud] [--no-text] [--no-ruler | --ruler-all] [--shot out.ppm [--shot-after N | --shot-game-frame N]]\n");
     exit(2);
 }
 
@@ -318,7 +408,7 @@ static void save_ppm(const char *path, int w, int h) {
 }
 
 int main(int argc, char **argv) {
-    Opts o; memset(&o, 0, sizeof o); o.w = 960; o.h = 600; o.mode = 1; o.use_table = 1; o.pitch = 14; o.dist = 15; o.focus = 9; o.focal = 620; o.shot_after = 8;
+    Opts o; memset(&o, 0, sizeof o); o.w = 960; o.h = 600; o.mode = 1; o.use_table = 1; o.ruler = 1; o.pitch = 14; o.dist = 15; o.focus = 9; o.focal = 620; o.shot_after = 8;
     int yaw_given = 0; o.yaw = 0;
     for (int i = 1; i < argc; i++) {
         const char *a = argv[i]; const char *v = i + 1 < argc ? argv[i + 1] : NULL;
@@ -335,6 +425,8 @@ int main(int argc, char **argv) {
         else if (!strcmp(a, "--focal") && v) { o.focal = atof(v); i++; }
         else if (!strcmp(a, "--hide-hud")) o.hide_hud = 1;
         else if (!strcmp(a, "--no-text")) o.no_text = 1;
+        else if (!strcmp(a, "--no-ruler")) o.ruler = 0;
+        else if (!strcmp(a, "--ruler-all")) o.ruler = 2;
         else if (!strcmp(a, "--shot-game-frame") && v) { o.shot_game_frame = atoi(v); i++; }                 /* screenshot once the game reaches this frame */
         else if (!strcmp(a, "--frames") && v) { o.frames_limit = atoi(v); i++; }                       /* test: quit after N frames */
         else if (!strcmp(a, "--mouse") && v) { if (sscanf(v, "%d,%d", &o.mouse_x, &o.mouse_y) != 2) die_usage(); o.mouse_set = 1; i++; }   /* test: start with the mouse here */
@@ -374,6 +466,13 @@ int main(int argc, char **argv) {
     GLuint vao2, vbo2; glGenVertexArrays(1, &vao2); glBindVertexArray(vao2); glGenBuffers(1, &vbo2); glBindBuffer(GL_ARRAY_BUFFER, vbo2);
     glEnableVertexAttribArray(0); glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vtx), (void *)0);
     glEnableVertexAttribArray(1); glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(Vtx), (void *)(3 * sizeof(float)));
+    GLuint vao3, vbo3, vao4, vbo4;                                        /* metre rulers (lines) and their labels (billboards) */
+    glGenVertexArrays(1, &vao3); glBindVertexArray(vao3); glGenBuffers(1, &vbo3); glBindBuffer(GL_ARRAY_BUFFER, vbo3);
+    glEnableVertexAttribArray(0); glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vtx), (void *)0);
+    glEnableVertexAttribArray(1); glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(Vtx), (void *)(3 * sizeof(float)));
+    glGenVertexArrays(1, &vao4); glBindVertexArray(vao4); glGenBuffers(1, &vbo4); glBindBuffer(GL_ARRAY_BUFFER, vbo4);
+    glEnableVertexAttribArray(0); glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vtx), (void *)0);
+    glEnableVertexAttribArray(1); glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(Vtx), (void *)(3 * sizeof(float)));
     glBindVertexArray(vao); glBindBuffer(GL_ARRAY_BUFFER, vbo);
 
     Source src; memset(&src, 0, sizeof src); snprintf(src.ipc, sizeof src.ipc, "%s", o.ipc); snprintf(src.file, sizeof src.file, "%s", o.statefile);
@@ -396,6 +495,7 @@ int main(int argc, char **argv) {
                 case SDLK_1: o.mode = 1; break;
                 case SDLK_2: o.mode = 2; break;
                 case SDLK_h: o.hide_hud = !o.hide_hud; break;
+                case SDLK_m: o.ruler = (o.ruler + 1) % 3; break;                           /* off / main layers / every depth group */
                 case SDLK_t: o.use_table = !o.use_table; dirty = 1; break;
                 case SDLK_r: if (tset) { Nb1TableSet *nt = nb1_tableset_load(o.tables); if (nt) { nb1_tableset_free(tset); tset = nt; dirty = 1; } else fprintf(stderr, "pbdesk: tables reload failed\n"); }
                           if (o.table[0]) { Nb1Table *nt = nb1_table_load(o.table); if (nt) { nb1_table_free(tab); tab = nt; dirty = 1; } else fprintf(stderr, "pbdesk: table reload failed\n"); } break;
@@ -438,6 +538,8 @@ int main(int argc, char **argv) {
             gl_scene_build(&gs, cur, &roms, use);
             build_ms = (double)(SDL_GetPerformanceCounter() - t0) * 1000.0 / SDL_GetPerformanceFrequency();
             glBindBuffer(GL_ARRAY_BUFFER, vbo); glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)gs.nverts * sizeof(Vtx), gs.verts, GL_DYNAMIC_DRAW);
+            glBindBuffer(GL_ARRAY_BUFFER, vbo3); glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(gs.nrverts ? gs.nrverts : 1) * sizeof(Vtx), gs.rverts, GL_STATIC_DRAW);
+            glBindBuffer(GL_ARRAY_BUFFER, vbo);
             shown_frame = game_frame; dirty = 0;
         }
 
@@ -502,6 +604,29 @@ int main(int argc, char **argv) {
                     glDrawArrays(GL_TRIANGLES, d->first, d->count);
                 }
             }
+            const int rlimit = o.ruler == 1 ? 10 : 24;
+            if (o.mode == 2 && o.ruler && gs.nrulers) {                            /* metre rulers: always on top so their scale can be read */
+                glDisable(GL_BLEND); glDisable(GL_DEPTH_TEST); glUseProgram(prog); glUniformMatrix4fv(uMVP, 1, GL_FALSE, mvp); glUniform1i(uTex, 0);
+                glBindVertexArray(vao3); glUniform1i(uMode, 3);
+                for (int ri = 0; ri < gs.nrulers; ri++) {
+                    const Ruler *r = &gs.rulers[ri]; if ((o.hide_hud && r->hud) || ri >= rlimit) continue;
+                    glUniform4f(uBox, r->col[0], r->col[1], r->col[2], 1.0f); glDrawArrays(GL_LINES, r->first, r->count);
+                }
+                glBindVertexArray(vao4); glUniform1i(uMode, 4);
+                for (int li = 0; li < gs.nlabels; li++) {
+                    const Label *l = &gs.labels[li]; if ((o.hide_hud && l->hud) || l->ruler >= rlimit) continue;
+                    double dx = l->pos[0] - cam.E[0], dy = l->pos[1] - cam.E[1], dz = l->pos[2] - cam.E[2], dist = sqrt(dx * dx + dy * dy + dz * dz);
+                    double hh = 17.0 * dist / cam.f, ww_ = hh * l->tw / l->th;                     /* about 17 px tall on screen */
+                    double x0 = l->right_align ? -ww_ : 0.0, x1 = x0 + ww_, y0 = l->right_align ? -hh / 2 : 0.0, y1 = y0 + hh; Vtx q[6]; double cx_[4] = { x0, x1, x1, x0 }, cy_[4] = { y1, y1, y0, y0 };
+                    static const float uvq[4][2] = { { 0, 0 }, { 1, 0 }, { 1, 1 }, { 0, 1 } }; Vtx c4[4];
+                    for (int k = 0; k < 4; k++) { c4[k] = (Vtx){ (float)(l->pos[0] + cam.right[0] * cx_[k] + cam.up[0] * cy_[k]), (float)(l->pos[1] + cam.right[1] * cx_[k] + cam.up[1] * cy_[k]),
+                                                               (float)(l->pos[2] + cam.right[2] * cx_[k] + cam.up[2] * cy_[k]), uvq[k][0], uvq[k][1] }; }
+                    q[0] = c4[0]; q[1] = c4[1]; q[2] = c4[2]; q[3] = c4[0]; q[4] = c4[2]; q[5] = c4[3];
+                    glBindBuffer(GL_ARRAY_BUFFER, vbo4); glBufferData(GL_ARRAY_BUFFER, sizeof q, q, GL_STREAM_DRAW);
+                    glBindTexture(GL_TEXTURE_2D, l->tex); glDrawArrays(GL_TRIANGLES, 0, 6);
+                }
+                glBindVertexArray(vao); glBindBuffer(GL_ARRAY_BUFFER, vbo);
+            }
             glDisable(GL_BLEND); glDepthMask(GL_TRUE); glDisable(GL_SCISSOR_TEST);
         }
         /* status text */
@@ -510,7 +635,7 @@ int main(int argc, char **argv) {
             snprintf(l1, sizeof l1, "%s  yaw %.1f pitch %.1f dist %.1f focus %.1f   game frame %u  build %.0f ms%s", o.mode == 1 ? "ARCADE" : "ORBIT", o.yaw, o.pitch, o.dist, o.focus, shown_frame, build_ms, o.paused ? "  PAUSED" : "");
             snprintf(l2, sizeof l2, "table: %s   F1 help", tn);
             const char *help[] = { "1 arcade view  2 orbit  A/D yaw  W/S pitch  Q/E distance  Z/X focus  right-drag or Alt+drag orbit  wheel distance",
-                                   "H hide HUD  T table on/off  R reload table  P pause  F5 screenshot  ESC quit   C coin  V start  left mouse = trigger" };
+                                   "H hide HUD  M metre rulers off/main/all (orbit view)  T table on/off  R reload table  P pause  F5 screenshot  ESC quit   C coin  V start  left mouse = trigger" };
             int lines = 3 + (o.show_help ? 2 : 0), bh = lines * 15 + 4, bw = ww < 1100 ? ww : 1100; uint8_t *buf = calloc((size_t)bw * bh, 4);
             for (size_t k = 0; k < (size_t)bw * bh; k++) { buf[k * 4 + 3] = 150; }
             put_text(buf, bw, bh, 4, 2, l1); put_text(buf, bw, bh, 4, 17, aim_txt); put_text(buf, bw, bh, 4, 32, l2);
