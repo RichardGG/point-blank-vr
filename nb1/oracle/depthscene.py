@@ -124,33 +124,55 @@ def assign_depths(items, table=DEFAULT_TABLE):
         floor = min(floor, it.z)
     return items
 
-def apply_decals(items, table=DEFAULT_TABLE):
-    ranges = table.get('decals', DEFAULT_DECALS)
-    d = table.get('defaults', DEFAULT_TABLE['defaults'])
-    for m in items:
-        if m.kind != 'sprite' or m.key is None or not any(lo <= m.key <= hi for lo, hi in ranges): continue
-        m.decal = True
-        cx, cy = int(math.floor(m.x0 + m.w / 2.0)), int(math.floor(m.y0 + m.h / 2.0))
-        if not (0 <= cx < W and 0 <= cy < H): continue
-        owner = None                  # what the arcade drew it over: the latest-drawn opaque non-decal item before it at its centre
-        for o in items:
-            if o is m or o.kind == 'mask' or o.order >= m.order or (o.kind == 'sprite' and o.key is not None and any(lo <= o.key <= hi for lo, hi in ranges)): continue
-            ox, oy = cx - o.x0, cy - o.y0
-            if 0 <= ox < o.w and 0 <= oy < o.h and o.pen[oy, ox] >= 0 and (owner is None or o.order > owner.order): owner = o
-        if owner is None: continue
-        m.hud = owner.hud; m.tilt_x = owner.tilt_x; m.tilt_y = owner.tilt_y; m.plane = owner.plane
-        ray = unproject(m.x0 + m.w / 2.0, m.y0 + m.h / 2.0, 1.0)
-        if owner.hud:
-            m.z = owner.z - DECAL_EPS
-        elif owner.plane is not None:
-            n, dd = owner.plane; den = float(ray @ n)
-            m.z = float(-(ray * (dd / den))[2]) - DECAL_EPS if abs(den) > 1e-9 and dd / den > 0 else owner.z - DECAL_EPS
-        else:
-            ctr, r, u = owner.corners(); n = np.cross(r, u); den = float(ray @ n)
-            t = float((ctr @ n) / den) if abs(den) > 1e-12 else -1.0
-            m.z = (t if t > 0 else owner.z) - DECAL_EPS
-    return items
+def _is_decal_code(it, ranges):
+    return it.kind == 'sprite' and it.key is not None and any(lo <= it.key <= hi for lo, hi in ranges)
 
+def _place_decal(m, owner):
+    """Give decal piece m the plane / tilt / depth of the surface `owner` it lies on."""
+    m.hud = owner.hud; m.tilt_x = owner.tilt_x; m.tilt_y = owner.tilt_y; m.plane = owner.plane
+    ray = unproject(m.x0 + m.w / 2.0, m.y0 + m.h / 2.0, 1.0)
+    if owner.hud:
+        m.z = owner.z - DECAL_EPS
+    elif owner.plane is not None:
+        n, dd = owner.plane; den = float(ray @ n)
+        m.z = float(-(ray * (dd / den))[2]) - DECAL_EPS if abs(den) > 1e-9 and dd / den > 0 else owner.z - DECAL_EPS
+    else:
+        ctr, r, u = owner.corners(); n = np.cross(r, u); den = float(ray @ n)
+        t = float((ctr @ n) / den) if abs(den) > 1e-12 else -1.0
+        m.z = (t if t > 0 else owner.z) - DECAL_EPS
+
+def apply_decals(items, table=DEFAULT_TABLE):
+    """Each decal pixel belongs to what the arcade drew it over there (the latest-drawn opaque non-decal item below it).  A decal
+    that straddles two surfaces is split into one piece per surface, each lying on its own, so the arcade-eye picture stays exact.
+    The first (largest) piece replaces the decal in place; the others are appended."""
+    ranges = table.get('decals', DEFAULT_DECALS)
+    extra = []
+    for m in list(items):
+        if not _is_decal_code(m, ranges): continue
+        m.decal = True
+        own = np.full((m.h, m.w), -1, np.int32); best = np.full((m.h, m.w), -1, np.int64); bestz = np.full((m.h, m.w), np.inf)
+        mine = m.tex[..., 3] > 0
+        for n, o in enumerate(items):
+            if o is m or o.kind == 'mask' or o.order >= m.order or _is_decal_code(o, ranges): continue
+            x0, y0 = max(m.x0, o.x0, 0), max(m.y0, o.y0, 0)
+            x1, y1 = min(m.x0 + m.w, o.x0 + o.w, W), min(m.y0 + m.h, o.y0 + o.h, H)
+            if x1 <= x0 or y1 <= y0: continue
+            ms = (slice(y0 - m.y0, y1 - m.y0), slice(x0 - m.x0, x1 - m.x0)); os_ = (slice(y0 - o.y0, y1 - o.y0), slice(x0 - o.x0, x1 - o.x0))
+            upd = mine[ms] & (o.tex[os_][..., 3] > 0) & ((o.order > best[ms]) | ((o.order == best[ms]) & (o.z < bestz[ms])))   # same order (split pieces): the nearer wins
+            own[ms][upd] = n; best[ms][upd] = o.order; bestz[ms][upd] = o.z
+        owners = sorted({int(v) for v in own[mine & (own >= 0)]}, key=lambda n: (-int((own[mine] == n).sum()), n))
+        if not owners: continue
+        orig_tex, orig_pen = m.tex.copy(), m.pen.copy()
+        for k, n in enumerate(owners):
+            sel = mine & ((own == n) | ((own < 0) if k == 0 else False))
+            piece = m if k == 0 else Item(**{sl: getattr(m, sl) for sl in Item.__slots__})
+            piece.decal = True
+            piece.tex = orig_tex.copy(); piece.tex[~sel] = 0
+            piece.pen = np.where(sel, orig_pen, -1).astype(np.int32)
+            _place_decal(piece, items[n])
+            if k: extra.append(piece)
+    items.extend(extra)
+    return items
 
 
 # ------------------------------------------------------------------ editing: your own art, punch-outs, splits
