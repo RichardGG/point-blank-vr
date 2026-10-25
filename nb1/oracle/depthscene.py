@@ -56,7 +56,8 @@ DECAL_EPS = 0.002
 DEFAULT_TABLE = {
     "defaults": {"z_front": 4.0, "z_back": 14.0, "hud_z": 2.0, "slot_gap": 0.0005},
     "rules": [
-        {"match": {"kind": "tilemap", "layer": [4, 5]}, "hud": True}
+        {"match": {"kind": "tilemap", "layer": [4, 5]}, "hud": True},
+        {"match": {"kind": "sprite", "code": [3799, 3860]}, "hud": True}      # timer digits/ring (3799-3820) and the ammo/heart pill (3857)
     ]
 }
 

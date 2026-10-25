@@ -67,8 +67,10 @@ static Nb1Table *table_alloc(void) {
     t->ndecals = 1; t->decal_lo[0] = 0xee5; t->decal_hi[0] = 0xee7; return t;
 }
 Nb1Table *nb1_table_default(void) {
-    Nb1Table *t = table_alloc(); t->rules = calloc(1, sizeof(Rule)); t->nrules = 1;
-    Rule *r = &t->rules[0]; r->m.kind = NB1_TILEMAP; r->m.nlayer = 2; r->m.layer[0] = 4; r->m.layer[1] = 5; r->hud = 1; return t;
+    Nb1Table *t = table_alloc(); t->rules = calloc(2, sizeof(Rule)); t->nrules = 2;
+    Rule *r = &t->rules[0]; r->m.kind = NB1_TILEMAP; r->m.nlayer = 2; r->m.layer[0] = 4; r->m.layer[1] = 5; r->hud = 1;
+    r = &t->rules[1]; r->m.kind = NB1_SPRITE; r->m.has_code = 1; r->m.code_lo = 3799; r->m.code_hi = 3860; r->hud = 1;    /* timer digits/ring and the ammo/heart pill */
+    return t;
 }
 
 Nb1Table *nb1_table_load(const char *path) {

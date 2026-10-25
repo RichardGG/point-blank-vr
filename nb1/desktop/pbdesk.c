@@ -595,7 +595,7 @@ int main(int argc, char **argv) {
         }
         if (o.ipc[0]) {                                           /* publish the aim for the game */
             FILE *f = fopen(aim_tmp, "w");
-            if (f) { fprintf(f, "%d %.2f %.2f %d %d %d\n", ++seq, sx, sy, trig, coin, start); fclose(f); rename(aim_tmp, aim_path); }
+            if (f) { fprintf(f, "%d %.2f %.2f %d %d %d %d\n", ++seq, sx, sy, trig, coin, start, o.paused); fclose(f); rename(aim_tmp, aim_path); }
         }
 
         /* draw */
