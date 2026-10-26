@@ -46,7 +46,8 @@ static void assign_depths(Nb1Item *items, int n, const Nb1Table *tab) {
             double den = dot(ray, it->pn);
             it->z = (fabs(den) > 1e-9 && it->pd / den > 0) ? -(ray[2] * (it->pd / den)) : 30.0;
         }
-        it->z -= tab->slot_gap * it->order;
+        double z_old = it->z; it->z -= tab->slot_gap * it->order;
+        if (it->has_plane && z_old > 1e-6) it->pd *= it->z / z_old;            /* later-drawn planes sit slightly nearer along the eye's rays (picture unchanged): coplanar walls and doors must not z-fight */
     }
     /* an untagged item drawn later must not end up behind something earlier */
     int *ord = malloc(n * sizeof *ord); for (int i = 0; i < n; i++) ord[i] = i;

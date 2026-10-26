@@ -124,7 +124,9 @@ def assign_depths(items, table=DEFAULT_TABLE):
             n, dd = it.plane; ray = unproject(it.x0 + it.w / 2.0, it.y0 + it.h / 2.0, 1.0)
             den = float(ray @ n)
             it.z = float(-(ray * (dd / den))[2]) if abs(den) > 1e-9 and dd / den > 0 else 30.0
-        it.z -= d['slot_gap'] * it.order
+        z_old = it.z; it.z -= d['slot_gap'] * it.order
+        if it.plane is not None and z_old > 1e-6:    # later-drawn planes sit slightly nearer along the eye's rays (the picture is unchanged): coplanar walls and doors must not z-fight
+            it.plane = (it.plane[0], it.plane[1] * it.z / z_old)
     # an UNTAGGED item the arcade draws after something must not end up behind it (e.g. a pri-7 fade/shadow sprite is
     # drawn after the flat HUD tilemap and darkens it): clamp automatic depths to stay in front of everything earlier.
     # Explicitly tagged items are left exactly where the table put them.
