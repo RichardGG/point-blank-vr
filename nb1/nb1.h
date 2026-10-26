@@ -44,6 +44,17 @@ int nb1_entry_tex(const Nb1State *st, const Nb1Roms *roms, const Nb1Entry *sp, u
 /* One tilemap layer, full screen: rgba[224][288][4], pen[224][288] (-1 empty). */
 void nb1_tilemap_tex(const Nb1State *st, const Nb1Roms *roms, int i, uint8_t rgb[0x2000][3], uint8_t *rgba, int32_t *pen);
 
+/* ---- sprite library: every sprite of the game's ROM, drawable at any time (data: research/data/sprites, made by make_sprite_library.py).
+ * A "frame" is a sprite seen in the captured scenes: columns x rows of 16x16 ROM tiles plus the palette(s) it was drawn with. Any other run of ROM tiles can be drawn too,
+ * with a guessed shape and the palette of the nearest seen tile. Results are Nb1Tex (rgba[h][w][4], pen = ROM pixel value or -1; free rgba and pen). */
+typedef struct Nb1SprLib Nb1SprLib;
+Nb1SprLib *nb1_sprlib_load(const char *dir);            /* NULL if frames.json is missing */
+void nb1_sprlib_free(Nb1SprLib *L);
+int  nb1_sprlib_count(const Nb1SprLib *L);
+int  nb1_sprlib_info(const Nb1SprLib *L, int id, int *ncols, int *nrows, int *npalettes, const int **scenes, int *nscenes);
+int  nb1_sprlib_frame_tex(const Nb1SprLib *L, const Nb1Roms *roms, int id, int palette_variant, Nb1Tex *out);
+int  nb1_sprlib_tiles_tex(const Nb1SprLib *L, const Nb1Roms *roms, int first_tile, int ncols, int nrows, Nb1Tex *out);
+
 /* ---- depth table (JSON; the same format as the Python tool, including "edits") */
 typedef struct Nb1Table Nb1Table;
 Nb1Table *nb1_table_default(void);

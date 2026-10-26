@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 project(nb1 C)
 set(CMAKE_C_STANDARD 11)
-add_library(nb1 STATIC nb1_video.c nb1_scene.c nb1_table.c nb1_edits.c nb1_png.c nb1_json.c nb1_surround.c)
+add_library(nb1 STATIC nb1_video.c nb1_scene.c nb1_table.c nb1_edits.c nb1_png.c nb1_json.c nb1_surround.c nb1_sprites.c)
 target_include_directories(nb1 PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(nb1 PRIVATE _GNU_SOURCE)
 find_library(M_LIB m)

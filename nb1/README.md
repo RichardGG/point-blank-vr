@@ -96,3 +96,12 @@ play it with `--sound`); the gun registers are still written by the MAME script 
 Entries match by exact sprite codes (`codes_all` / `codes_any`, first wins) or by background-art similarity to captured reference scenes
 (`art_scenes`, `min_similarity`, Jaccard over (layer, tile code) pairs from `scene_refs.json`; the most similar entry wins). `pbdesk --tables scene_tables.json`
 uses it; an explicit `--table` overrides. `tests/run_select.py` checks C against Python (318 of 318 states agreed). See the research repo's `research/DEPTH-SCENES.md`.
+
+## Sprite library
+
+`nb1_sprites.c` gives access to every sprite of the sprite ROM at any time, whether or not the current scene has it loaded (for decorating scenes).
+The ROM (32,768 tiles of 16x16 pixels, 8 bpp, 255 = transparent; 22,956 are not empty) holds pixels only. Which tiles form a sprite, and the palette, are written into sprite RAM by the game at run time, so
+`research/tools/nb1/make_sprite_library.py` collects them from the captured scenes (`research/data/sprites`): **507 frames** (columns x rows of tiles plus palettes, 127 palettes) covering 7,202 tiles.
+`nb1_sprlib_load`, `nb1_sprlib_frame_tex` (a frame with one of its palettes) and `nb1_sprlib_tiles_tex` (any run of ROM tiles, any grid; palette of the nearest seen tile, grey if none) return `Nb1Tex`, like `nb1_entry_tex`.
+`nb1_tool sprlib LIB ROMS OUT [tiles FIRST NCOLS NROWS]` writes them out. The C and Python renderings of all 507 frames are identical.
+Not extracted: the shapes and palettes of the other 15,754 non-empty tiles (the game's composition data is not stored verbatim in the program ROM; the library keeps a guess in `guess.json` that is about 75% right on known sprites).

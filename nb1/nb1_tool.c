@@ -147,10 +147,24 @@ static int surround_cmd(int argc, char **argv) {
     return 0;
 }
 
+/* sprlib LIBDIR ROMS OUT_DIR [IDS...|tiles FIRST NCOLS NROWS]: write sprites of the library as raw files OUT/<id>.rgba (w, h as two int32, then rgba) - for tests and a quick look */
+static int sprlib_cmd(int argc, char **argv) {
+    Nb1SprLib *L = nb1_sprlib_load(argv[2]); Nb1Roms roms; if (!L || nb1_roms_load(&roms, argv[3])) { fprintf(stderr, "sprlib: cannot load the library or the ROMs\n"); return 1; }
+    int from = 0, to = nb1_sprlib_count(L), ntiles = 0; if (argc >= 8 && !strcmp(argv[5], "tiles")) ntiles = 1;
+    for (int id = from; id < to || ntiles; id++) {
+        Nb1Tex t; int ok; char p[1100];
+        if (ntiles) { ok = nb1_sprlib_tiles_tex(L, &roms, atoi(argv[6]), atoi(argv[7]), atoi(argv[8]), &t); snprintf(p, sizeof p, "%s/tiles_%s.rgba", argv[4], argv[6]); }
+        else { ok = nb1_sprlib_frame_tex(L, &roms, id, 0, &t); snprintf(p, sizeof p, "%s/%d.rgba", argv[4], id); }
+        if (ok) { FILE *f = fopen(p, "wb"); if (f) { int32_t wh[2] = { t.w, t.h }; fwrite(wh, 4, 2, f); fwrite(t.rgba, 4, (size_t)t.w * t.h, f); fclose(f); } free(t.rgba); free(t.pen); }
+        if (ntiles) break;
+    }
+    nb1_sprlib_free(L); nb1_roms_free(&roms); return 0;
+}
 int main(int argc, char **argv) {
     if (argc >= 4 && !strcmp(argv[1], "select")) return select_cmd(argc, argv);
     if (argc >= 6 && !strcmp(argv[1], "seltest")) return seltest_cmd(argc, argv);
     if (argc >= 4 && !strcmp(argv[1], "surround")) return surround_cmd(argc, argv);
+    if (argc >= 5 && !strcmp(argv[1], "sprlib")) return sprlib_cmd(argc, argv);
     if (argc >= 2 && !strcmp(argv[1], "dump")) return dump(argc, argv);
     fprintf(stderr, "usage: nb1_tool dump ROMDIR TILE_STATE SPR_STATE TABLE|- OUTDIR\n"); return 2;
 }
