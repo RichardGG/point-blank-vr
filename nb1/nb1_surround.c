@@ -258,13 +258,14 @@ static int map_continues(const uint8_t *map, int ox, int oy, int flip, double fi
 }
 static int is_stage_door(const Nb1Item *it) { return it->kind == NB1_SPRITE && it->has_key && (it->key == 2289 || it->key == 2401 || it->key == 2415 || it->key == 2528); }
 static int in_list(const Json *a, int v) { if (!a || a->t != J_ARR) return 0; for (int k = 0; k < a->n; k++) if ((int)a->kid[k]->num == v) return 1; return 0; }
+static double g_bgz = -1;                                                  /* depth of the deepest layer continued sideways; -1 when none, or when the art also continues vertically */
 static void build_extension(Nb1Scene *s, const Nb1State *st, const Nb1Roms *roms, const Json *ex, const double fog[3]) {
     double ypx = jnum(ex, "y", 0), deg = jnum(ex, "deg", 150), f0 = 70, f1 = 150; jpair(ex, "fade", &f0, &f1);          /* azimuth in degrees to either side; fade range */
     double min_area = jnum(ex, "min_area", 9000), min_cover = jnum(ex, "min_cover", 0.2); int with_sprites = (int)jnum(ex, "sprites", 1);
     int rep_x = (int)jnum(ex, "repeat_x", 0), rep_y = (int)jnum(ex, "repeat_y", 0);                                       /* periodic art: repeat instead of mirror */
     const Json *lj = ex ? json_get(ex, "layers") : NULL, *mx = ex ? json_get(ex, "map_x") : NULL, *my = ex ? json_get(ex, "map_y") : NULL; int want[4] = { 1, 1, 1, 1 };
     if (lj && lj->t == J_ARR) { for (int i = 0; i < 4; i++) want[i] = 0; for (int k = 0; k < lj->n; k++) { int L = (int)lj->kid[k]->num; if (L >= 0 && L < 4) want[L] = 1; } }
-    int n0 = s->n;
+    int n0 = s->n, any_v = 0; g_bgz = -1;
     for (int a = 0; a < n0; a++) {
         const Nb1Item *base = &s->items[a]; if ((base->kind != NB1_TILEMAP && !(with_sprites && base->kind == NB1_SPRITE)) || base->hud || base->has_plane || base->decal || is_stage_door(base)) continue;
         if (base->kind == NB1_TILEMAP && (base->id < 0 || base->id > 3 || !want[base->id])) continue;
@@ -301,13 +302,14 @@ static void build_extension(Nb1Scene *s, const Nb1State *st, const Nb1Roms *roms
                 it = new_item(s, TW, TH); bs = &s->items[a];                                 /* new_item may have moved the array */
                 for (int y = 0; y < bh; y++) for (int x = 0; x < bw; x++) memcpy(it->tex + ((size_t)(by0 - cy0 + y) * TW + (bx0 - cx0 + x)) * 4, bs->tex + ((size_t)y * bw + x) * 4, 4);
             }
-            it->wrap = hm ? 1 : (rep_x ? 1 : 2); it->wrap_t = vm ? 1 : (rep_y ? 1 : 2);
-            emit_band(it, z, ypx, deg, side, &b2);
+            it->wrap = hm ? 1 : (rep_x ? 1 : 2); it->wrap_t = vm ? 1 : 0;                           /* sideways: map, repeat or mirror; vertically only the game's own map (no mirroring) */
+            emit_band(it, z, vm ? ypx : 0, deg, side, &b2); if (vm) any_v = 1; if (z > g_bgz) g_bgz = z;
             it->fade_on = 2; it->fade_r0 = f0 * M_PI / 180; it->fade_r1 = f1 * M_PI / 180; memcpy(it->fade_col, fog, sizeof it->fade_col);              /* fade_on 2: by azimuth */
         }
         free(map);
         (void)info_bits;
     }
+    if (any_v) g_bgz = -1; (void)rep_y;
 }
 
 /* ---------------------------------------------------------------- entry */
@@ -317,8 +319,8 @@ int nb1_scene_add_surround(Nb1Scene *s, const Nb1State *st, const Nb1Roms *roms,
     Json *autoj = NULL; const Json *S = tab && tab->root && tab->root->t == J_OBJ ? json_get(tab->root, "surround") : NULL;
     if (!S) { autoj = json_parse(AUTO); S = json_get(autoj, "surround"); }
     Comp *c = malloc(sizeof *c); composite(s, c);
-    double horizon_y = jnum(S, "horizon_y", NB1_H / 2.0);
-    { double pdeg = jnum(S, "pitch", atan((NB1_H / 2.0 - horizon_y) / NB1_FOCAL) * 180.0 / M_PI); if (s->adj_has[0]) pdeg = s->adj_pitch; g_pitch = pdeg * M_PI / 180; s->pitch_deg = pdeg; }
+    double horizon_y = NB1_H / 2.0; g_bgz = -1;                                   /* the picture is not tilted by default; a recipe "pitch" or the editor can still tilt it */
+    { double pdeg = jnum(S, "pitch", 0); if (s->adj_has[0]) pdeg = s->adj_pitch; g_pitch = pdeg * M_PI / 180; s->pitch_deg = pdeg; }
     const Json *sky = json_get(S, "sky"), *ex = json_get(S, "extend"), *gr = json_get(S, "ground"), *ce = json_get(S, "ceiling");
     /* colours */
     double top[3] = { 40, 70, 140 }, hor[3] = { 190, 210, 235 }, fog[3] = { 60, 60, 70 };
@@ -346,12 +348,11 @@ int nb1_scene_add_surround(Nb1Scene *s, const Nb1State *st, const Nb1Roms *roms,
     s->ground_y = s->ceil_y = NAN;
     if (gr) {
         double gy = jnum(gr, "y", -1.5), br = jnum(gr, "base_row", -1);
-        if (br > 0) { int bl = (int)jnum(gr, "base_layer", 0); double zl = 0; for (int i = 0; i < s->n; i++) if (s->items[i].kind == NB1_TILEMAP && s->items[i].id == bl && !s->items[i].hud) zl = s->items[i].z;
-                      if (zl > 0) gy = -(br - horizon_y) * zl / NB1_FOCAL; }                     /* the ground meets that layer at that picture row: eye height from the scene itself */
+        (void)br; if (g_bgz > 0) gy = -(NB1_H / 2.0) * g_bgz / NB1_FOCAL;                     /* the floor is at the bottom edge of the deepest layer, so it never covers the continued background */
         if (s->adj_has[1]) gy = s->adj_ground;
         s->ground_y = gy; build_plane(s, gr, c, horizon_y, gy, R * 0.9, fog, 0);
     }
-    if (ce) { double cy = jnum(ce, "y", 1.5); if (s->adj_has[2]) cy = s->adj_ceil; s->ceil_y = cy; build_plane(s, ce, c, horizon_y, cy, R * 0.9, fog, 1); }
+    if (ce) { double cy = jnum(ce, "y", 1.5); if (g_bgz > 0) cy = (NB1_H / 2.0) * g_bgz / NB1_FOCAL; if (s->adj_has[2]) cy = s->adj_ceil; s->ceil_y = cy; build_plane(s, ce, c, horizon_y, cy, R * 0.9, fog, 1); }
     { const Json *wl = json_get(S, "walls"); if (wl) { double xw = jnum(wl, "x", 1.7); build_wall(s, wl, c, -xw, R * 0.5, fog); build_wall(s, wl, c, xw, R * 0.5, fog); } }
     /* the black cap behind the deepest layer: what the arcade shows where no layer draws */
     double zmax = 1; for (int i = 0; i < s->n; i++) { const Nb1Item *it = &s->items[i]; if (it->kind == NB1_TILEMAP || it->kind == NB1_SPRITE) if (!it->hud && it->z > zmax && it->z < 100) zmax = it->z; }
