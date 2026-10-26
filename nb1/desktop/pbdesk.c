@@ -78,6 +78,10 @@ int main(int argc, char **argv) {
     Nb1Roms roms; if (nb1_roms_load(&roms, o.roms)) { fprintf(stderr, "pbdesk: cannot load ROMs from %s\n", o.roms); return 1; }
     Nb1Table *tab = o.table[0] ? nb1_table_load(o.table) : NULL;
     if (o.table[0] && !tab) { fprintf(stderr, "pbdesk: cannot read table %s (using the default)\n", o.table); }
+    if (o.scenes[0] && !o.tables[0] && !o.table[0]) {                                                              /* frozen scenes need the per-scene tables (surround, depths): look beside the scenes folder */
+        snprintf(o.tables, sizeof o.tables, "%s/../tables/scene_tables.json", o.scenes); FILE *tf = fopen(o.tables, "rb");
+        if (tf) { fclose(tf); fprintf(stderr, "pbdesk: using %s (pass --tables to choose another)\n", o.tables); } else { o.tables[0] = 0; fprintf(stderr, "pbdesk: no --tables given: scenes use the default table (no surround). Use --tables research/data/tables/scene_tables.json\n"); }
+    }
     Nb1Table *deftab = nb1_table_default();
     Nb1TableSet *tset = (o.tables[0] && !o.table[0]) ? nb1_tableset_load(o.tables) : NULL;     /* an explicit --table wins */
     int new_state = 1; Nb1Selector *selr = NULL;                                                                  /* keeps the table choice stable from frame to frame */
