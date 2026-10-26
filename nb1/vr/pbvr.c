@@ -121,7 +121,7 @@ typedef struct { int kind, id, pri, has_key, key; } SelItem;     /* what the poi
 /* ------------------------------------------------------------------ options */
 typedef struct {
     char roms[512], ipc[512], table[512], tables[512];
-    double vscale, sdiag, sdist, gun_pitch, aim_yaw, aim_pitch, jump_dist; int no_vr, gaze, no_surround, scene_start, live, no_brackets, hud_flat; double hud_below; char edits_out[512], scenes[512];
+    double vscale, sdiag, sdist, gun_pitch, aim_yaw, aim_pitch, jump_dist; int no_labels; int no_vr, gaze, no_surround, scene_start, live, no_brackets, hud_flat; double hud_below; char edits_out[512], scenes[512];
 } Opts;
 
 /* ------------------------------------------------------------------ scene worker: reads states and builds scenes off the render thread */
@@ -353,6 +353,14 @@ static int save_edits(const char *path, const Worker *W, const GlScene *g, int s
     fprintf(f, "}\n"); fclose(f); return n;
 }
 
+typedef struct { char s[48]; GLuint tex; int w, h; } LabelTex;                               /* small text labels, made once per distinct text */
+typedef struct { LabelTex e[96]; int n; } LabelCache;
+static LabelTex *label_get(LabelCache *c, const char *s) {
+    for (int i = 0; i < c->n; i++) if (!strcmp(c->e[i].s, s)) return &c->e[i];
+    if (c->n >= 96) return NULL;
+    LabelTex *l = &c->e[c->n++]; snprintf(l->s, sizeof l->s, "%s", s); l->tex = text_tex(s, &l->w, &l->h); return l;
+}
+
 static double now_s(void) { return (double)SDL_GetPerformanceCounter() / (double)SDL_GetPerformanceFrequency(); }
 
 #ifdef _WIN32
@@ -382,6 +390,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(a, "--gun-pitch") && v) { o.gun_pitch = atof(v); i++; }
         else if (!strcmp(a, "--no-vr")) o.no_vr = 1;
         else if (!strcmp(a, "--no-surround")) o.no_surround = 1;
+        else if (!strcmp(a, "--no-labels")) o.no_labels = 1;                                                  /* no scene name under the picture, no names on the HUD sprites */
         else if (!strcmp(a, "--no-brackets")) o.no_brackets = 1;                                              /* no white corner marks round the play window */
         else if (!strcmp(a, "--hud-overlay")) o.hud_flat = 1;                                                  /* keep the HUD on the picture (default: moved below it) */
         else if (!strcmp(a, "--hud-below") && v) { o.hud_below = atof(v); i++; }                                /* arcade pixels the HUD is moved down (default 72) */
@@ -449,6 +458,7 @@ int main(int argc, char **argv) {
     double sx = 144, sy = 112, last_aim_write = 0, fps_t = now_s(); int fps_n = 0; int running = 1;
     int shot_wait = 0;
     /* pause-mode editor state */
+    Panel namep; memset(&namep, 0, sizeof namep); LabelCache lc; memset(&lc, 0, sizeof lc);
     Panel panel, side_l, side_r; memset(&panel, 0, sizeof panel); memset(&side_l, 0, sizeof side_l); memset(&side_r, 0, sizeof side_r);
     int has_sel = 0, scope = 0, cur_scene = -1; double cur_sim = 0; Nb1ScaleSpec sel; SelItem sel_item; memset(&sel, 0, sizeof sel); memset(&sel_item, 0, sizeof sel_item);
     double jump = 0, last_t = now_s(); int prev_sq[2] = { 0, 0 }, prev_ba = 0, prev_bb = 0, prev_bx = 0, prev_by = 0, prev_seltrig = 0;
@@ -670,6 +680,7 @@ int main(int argc, char **argv) {
         } else if (t < msg_until) {                                           /* a short note while playing: the scene just jumped to */
             panel_set(&panel, 0, scn ? scene_desc : ""); panel_set(&panel, 1, ""); panel_set(&panel, 2, ""); panel_set(&panel, 3, msg);
         }
+        { char nm[320]; if (scn) snprintf(nm, sizeof nm, "%s   table: %s", scene_desc, table_name ? table_name : "default"); else snprintf(nm, sizeof nm, "SCENE #%d (%.0f%% art match)   table: %s", cur_scene, cur_sim * 100, table_name ? table_name : "default"); panel_set(&namep, 0, o.no_labels ? "" : nm); }
         /* render */
         if (!o.no_vr) {
             XrCompositionLayerProjectionView pv[2]; XrCompositionLayerProjection layer = { XR_TYPE_COMPOSITION_LAYER_PROJECTION };
@@ -691,9 +702,33 @@ int main(int argc, char **argv) {
                             for (int k = 0; k < mm && nv < 30; k++) for (int q = 0; q < 2; q++) { double o3[3]; m4_point(s2p, Pq[(k + q) % mm], o3); seg[nv * 3] = (float)o3[0]; seg[nv * 3 + 1] = (float)o3[1]; seg[nv * 3 + 2] = (float)o3[2]; nv++; }
                             draw_lines(&gfx, &pv_, seg, nv, 1.0f, 0.85f, 0.1f);
                         }
-                        panel_draw(&gfx, &panel, &pv_, m4_yaw_pos(yaw0, origin), o.sdist, -(vw_m * 224.0 / 288.0) / 2 - 0.02, vw_m / 480.0, 0);
+                        panel_draw(&gfx, &panel, &pv_, m4_yaw_pos(yaw0, origin), o.sdist, -(vw_m * 224.0 / 288.0) / 2 - (o.hud_flat || o.no_labels ? 0 : (o.hud_below + 88) * vw_m / 288.0) - 0.02, vw_m / 480.0, 0);
                         if (paused) panel_draw(&gfx, &side_l, &pv_, m4_yaw_pos(yaw0 + 0.95, origin), 1.0, 0.16, 0.0013, 1);       /* turn left: the controls */
                         if (paused) panel_draw(&gfx, &side_r, &pv_, m4_yaw_pos(yaw0 - 0.95, origin), 1.0, 0.16, 0.0013, 1);       /* turn right: this scene's edits */
+                    }
+                    if (!o.no_labels && front.loaded) {                               /* scene name under the picture; small names on the HUD sprites (for notes while recording) */
+                        M4 pv_ = m4_mul(proj[e], m4_rigid_inverse(m4_from_pose(xr.views[e].pose))); M4 s2p = m4_mul(m4_yaw_pos(yaw0, origin), m4_mul(m4_trans(0, 0, jump), m4_model(zs, pitch_r)));
+                        double hb = o.hud_flat ? 0.0 : o.hud_below;
+                        panel_draw(&gfx, &namep, &pv_, m4_yaw_pos(yaw0, origin), o.sdist, -(vw_m * 224.0 / 288.0) / 2 - (hb + 66) * vw_m / 288.0, vw_m / 400.0, 0);
+                        int nl = 0, stack = 0; double rc[48][4];                                  /* placed labels (arcade px): a new one is pushed down until it clears them */
+                        for (int i = 0; i < front.scene.n && nl < 48; i++) {
+                            const Nb1Item *it = &front.scene.items[i]; if (!it->hud || (it->kind != NB1_SPRITE && it->kind != NB1_TILEMAP)) continue;
+                            char lt[48]; double px0, py0; double zz = it->z, F = NB1_FOCAL;
+                            if (it->kind == NB1_TILEMAP) { snprintf(lt, sizeof lt, "tilemap L%d", it->id); px0 = NB1_W - 64; py0 = NB1_H + hb + 2 + 9.0 * stack++; }
+                            else { if (it->has_key) snprintf(lt, sizeof lt, "S%d #%d", it->pri, it->key); else snprintf(lt, sizeof lt, "S%d", it->pri); double Pq[16][3]; int mm = item_polygon(it, front.scene.far, Pq); if (mm < 3) continue;
+                                   double mx = 1e9, my = 1e9; for (int k = 0; k < mm; k++) { if (Pq[k][0] < mx) mx = Pq[k][0]; double yq = Pq[k][1] - hb * it->z / F; if (yq < my) my = yq; }   /* left edge, bottom edge (after the HUD shift) */
+                                   px0 = NB1_W / 2.0 + mx * F / it->z; py0 = NB1_H / 2.0 - my * F / it->z + 1; }
+                            LabelTex *lt_ = label_get(&lc, lt); if (!lt_) continue;
+                            { double w_ = lt_->w * 0.8, h_ = lt_->h * 0.8; for (int again = 1, g = 0; again && g < 12; g++) { again = 0; for (int j = 0; j < nl; j++) if (px0 < rc[j][0] + rc[j][2] && px0 + w_ > rc[j][0] && py0 < rc[j][1] + rc[j][3] && py0 + h_ > rc[j][1]) { py0 = rc[j][1] + rc[j][3]; again = 1; } } rc[nl][0] = px0; rc[nl][1] = py0; rc[nl][2] = w_; rc[nl][3] = h_; }
+                            double k_ = zz / F, tw = lt_->w * 0.8 * k_, th = lt_->h * 0.8 * k_, x0 = (px0 - NB1_W / 2.0) * k_, y0 = (NB1_H / 2.0 - py0) * k_;
+                            double cx[4] = { x0, x0 + tw, x0 + tw, x0 }, cy[4] = { y0, y0, y0 - th, y0 - th }; static const float uv[4][2] = { { 0, 0 }, { 1, 0 }, { 1, 1 }, { 0, 1 } }; Vtx c[4], q[6];
+                            for (int k = 0; k < 4; k++) { double v[3] = { cx[k], cy[k], -zz }, o3[3]; m4_point(s2p, v, o3); c[k] = (Vtx){ (float)o3[0], (float)o3[1], (float)o3[2], uv[k][0], uv[k][1] }; }
+                            q[0] = c[0]; q[1] = c[1]; q[2] = c[2]; q[3] = c[0]; q[4] = c[2]; q[5] = c[3];
+                            float m[16]; for (int k = 0; k < 16; k++) m[k] = (float)pv_.m[k];
+                            glDisable(GL_DEPTH_TEST); glUseProgram(gfx.prog); glUniformMatrix4fv(gfx.uMVP, 1, GL_FALSE, m); glUniform1i(gfx.uTex, 0); glUniform1i(gfx.uMode, 4);
+                            glBindVertexArray(gfx.line_vao); glBindBuffer(GL_ARRAY_BUFFER, gfx.line_vbo); glBufferData(GL_ARRAY_BUFFER, sizeof q, q, GL_STREAM_DRAW); glBindTexture(GL_TEXTURE_2D, lt_->tex); glDrawArrays(GL_TRIANGLES, 0, 6);
+                            glBindVertexArray(gfx.vao); glBindBuffer(GL_ARRAY_BUFFER, gfx.vbo); glEnable(GL_DEPTH_TEST); nl++;
+                        }
                     }
                     if (!o.no_brackets && front.loaded) {                              /* white corner marks round the play window, like a camera viewfinder */
                         M4 pv_ = m4_mul(proj[e], m4_rigid_inverse(m4_from_pose(xr.views[e].pose))); M4 s2p = m4_mul(m4_yaw_pos(yaw0, origin), m4_mul(m4_trans(0, 0, jump), m4_model(zs, pitch_r)));
