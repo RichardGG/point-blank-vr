@@ -14,9 +14,9 @@
 typedef struct { int code_lo, code_hi, col_lo, col_hi, pri_lo, pri_hi; double weight; } BSel;
 typedef struct { char name[64]; int only; BSel *prefer, *avoid; int np, na; } BScene;
 typedef struct { int code, col; double n, hits, pen; } BKey;
-typedef struct { char id[160]; char text[160]; BKey *keys; int nkeys, cap; } BStage;       /* what one stage (difficulty, stage counter, card) has taught: its own sprite statistics and the sentence the game shows before it */
-typedef struct { int code, col, pri, cx, cy, w, h; double wt; } Cand;
-typedef struct { double min_size, max_size, unknown, speed, gap, hold; } BDef;
+typedef struct { char id[160]; char text[160]; BKey *keys; int nkeys, cap; BScene sc; int has_sc; int *order, norder; int match_sample, multihit; } BStage;       /* what one stage (difficulty, stage counter, card) has taught: its own sprite statistics and the sentence the game shows before it */
+typedef struct { int code, col, pri, cx, cy, w, h; double wt; int still; } Cand;       /* still: frames it has been at the same place (scenery) */
+typedef struct { double min_size, max_size, unknown, speed, gap, hold, lead, fire_min; } BDef;
 
 struct Nb1Bot {
     BDef d; BScene *sc; int nsc; BKey *keys; int nkeys, capkeys; BScene *cur; BStage *stages; int nstages; BStage *stage; unsigned rng;
@@ -26,7 +26,7 @@ struct Nb1Bot {
     int shot_code, shot_col; unsigned shot_frame; int shot_pending;
     int last_score, last_lives, last_hit_visible; unsigned last_coin, last_start;
     Cand prev[64]; int nprev;
-    char status[160]; unsigned nshots, nhits, npen; int want_mode; char stage_override[160];
+    char status[160]; unsigned nshots, nhits, npen; int want_mode; char stage_override[160]; struct { int x, y; unsigned f; } rs[8]; int nrs; int shot_score, shot_lives, score_claimed, lives_claimed; struct { unsigned f; int code, col, x, y, sscore, slives, done; double vx, vy, err; } q[8]; int nq; struct { int x, y, code, hit; unsigned f; } hist[32]; int nhist, hist_head;
 };
 
 static int sel_parse(const Json *a, BSel **out) {
@@ -53,20 +53,23 @@ static BKey *key_get(Nb1Bot *b, int code, int col, int create) { return keys_get
 static BKey *skey_get(Nb1Bot *b, int code, int col, int create) { return b->stage ? keys_get(&b->stage->keys, &b->stage->nkeys, &b->stage->cap, code, col, create) : NULL; }
 
 Nb1Bot *nb1_bot_new(const char *rules_path) {
-    Nb1Bot *b = calloc(1, sizeof *b); b->d = (BDef){ 8, 200, 0.35, 14, 12, 4 };
+    Nb1Bot *b = calloc(1, sizeof *b); b->d = (BDef){ 8, 200, 0.35, 14, 12, 4, 6, 0.2 }; b->lives_claimed = 99;
     if (!rules_path) return b;
     FILE *f = fopen(rules_path, "rb"); if (!f) { fprintf(stderr, "bot: cannot read %s (using the defaults)\n", rules_path); return b; }
     fseek(f, 0, SEEK_END); long n = ftell(f); fseek(f, 0, SEEK_SET); char *txt = malloc((size_t)n + 1); if (fread(txt, 1, (size_t)n, f) != (size_t)n) n = 0; txt[n] = 0; fclose(f);
     Json *j = json_parse(txt); free(txt); if (!j) { fprintf(stderr, "bot: %s is not valid JSON\n", rules_path); return b; }
     const Json *d = json_get(j, "defaults");
     if (d) { const Json *v; if ((v = json_get(d, "min_size"))) b->d.min_size = v->num; if ((v = json_get(d, "max_size"))) b->d.max_size = v->num; if ((v = json_get(d, "unknown_weight"))) b->d.unknown = v->num;
-             if ((v = json_get(d, "speed"))) b->d.speed = v->num; if ((v = json_get(d, "shot_gap"))) b->d.gap = v->num; if ((v = json_get(d, "trigger_hold"))) b->d.hold = v->num; }
+             if ((v = json_get(d, "speed"))) b->d.speed = v->num; if ((v = json_get(d, "shot_gap"))) b->d.gap = v->num; if ((v = json_get(d, "trigger_hold"))) b->d.hold = v->num; if ((v = json_get(d, "lead"))) b->d.lead = v->num; if ((v = json_get(d, "fire_min"))) b->d.fire_min = v->num; }
     const Json *ks = json_get(j, "keys");                                  /* [[code, colour, shots, hits, penalties], ...] */
     if (ks && ks->t == J_ARR) for (int i = 0; i < ks->n; i++) { const Json *r = ks->kid[i]; if (r->t != J_ARR || r->n < 5) continue; BKey *k = key_get(b, (int)r->kid[0]->num, (int)r->kid[1]->num, 1); k->n = r->kid[2]->num; k->hits = r->kid[3]->num; k->pen = r->kid[4]->num; }
     const Json *stj = json_get(j, "stages");                              /* {"d2_n1_c2": {"text": "...", "keys": [[code, colour, shots, hits, penalties], ...]}} */
     if (stj && stj->t == J_OBJ) { b->stages = calloc((size_t)(stj->n ? stj->n : 1), sizeof *b->stages);
         for (int i = 0; i < stj->n; i++) { BStage *g = &b->stages[b->nstages++]; snprintf(g->id, sizeof g->id, "%s", stj->key[i]); const Json *o = stj->kid[i], *v;
             if ((v = json_get(o, "text")) && v->t == J_STR) snprintf(g->text, sizeof g->text, "%s", v->str);
+            g->has_sc = 1; g->sc.only = (v = json_get(o, "only")) && v->num != 0; g->sc.np = sel_parse(json_get(o, "prefer"), &g->sc.prefer); g->sc.na = sel_parse(json_get(o, "avoid"), &g->sc.avoid);
+            if ((v = json_get(o, "order")) && v->t == J_ARR) { g->norder = v->n; g->order = malloc((size_t)(v->n ? v->n : 1) * sizeof *g->order); for (int q = 0; q < v->n; q++) g->order[q] = (int)v->kid[q]->num; }   /* codes to shoot in this sequence */
+            g->match_sample = (v = json_get(o, "match_sample")) && v->num != 0; g->multihit = (v = json_get(o, "multihit")) && v->num != 0;
             const Json *kk = json_get(o, "keys"); if (kk && kk->t == J_ARR) for (int q = 0; q < kk->n; q++) { const Json *r = kk->kid[q]; if (r->t != J_ARR || r->n < 5) continue;
                 BKey *k = keys_get(&g->keys, &g->nkeys, &g->cap, (int)r->kid[0]->num, (int)r->kid[1]->num, 1); k->n = r->kid[2]->num; k->hits = r->kid[3]->num; k->pen = r->kid[4]->num; } } }
     const Json *sc = json_get(j, "scenes");
@@ -77,7 +80,7 @@ Nb1Bot *nb1_bot_new(const char *rules_path) {
     }
     json_free(j); return b;
 }
-void nb1_bot_free(Nb1Bot *b) { if (!b) return; for (int i = 0; i < b->nstages; i++) free(b->stages[i].keys); free(b->stages); for (int i = 0; i < b->nsc; i++) { free(b->sc[i].prefer); free(b->sc[i].avoid); } free(b->sc); free(b->keys); free(b); }
+void nb1_bot_free(Nb1Bot *b) { if (!b) return; for (int i = 0; i < b->nstages; i++) { free(b->stages[i].keys); free(b->stages[i].order); if (b->stages[i].has_sc) { free(b->stages[i].sc.prefer); free(b->stages[i].sc.avoid); } } free(b->stages); for (int i = 0; i < b->nsc; i++) { free(b->sc[i].prefer); free(b->sc[i].avoid); } free(b->sc); free(b->keys); free(b); }
 void nb1_bot_set_scene(Nb1Bot *b, const char *name) {
     b->cur = NULL; if (!name) return;
     for (int i = 0; i < b->nsc; i++) if (!strcmp(b->sc[i].name, name)) { b->cur = &b->sc[i]; return; }
@@ -99,11 +102,35 @@ int nb1_bot_save_stats(const Nb1Bot *b, const char *path) {
     fprintf(f, "}\n"); fclose(f); return 0;
 }
 
+static unsigned g_frame = 0;
+static int g_order_min = 1 << 30;                                    /* lowest position in the stage's "order" among the targets visible now */
+static int g_sample_code = -1;                                       /* the code of the SAMPLE target in a "match the sample" stage */
 static double weight_of(Nb1Bot *b, const Cand *c) {
     double w = b->d.unknown; BKey *k = key_get(b, c->code, c->col, 0), *sk = b->stage ? keys_get(&b->stage->keys, &b->stage->nkeys, &b->stage->cap, c->code, c->col, 0) : NULL;
     if (sk && sk->n >= 3) k = sk;                                                  /* what this very stage has shown beats the general statistics */
-    if (k && k->n > 0) { w = (k->hits + 0.3) / (k->n + 1.0); if (w < 0.04) w = 0.04; }
-    if (k && k->pen >= 1 && k->pen >= k->hits) return 0;                          /* shooting it cost a life more often than it scored */
+    double gn = 0, gh = 0, gp = 0;                                                  /* the sprite family (the 16 codes around: animation frames of one creature): used when this exact sprite has little data */
+    if (!(k && k->n >= 3)) { for (int i = 0; i < b->nkeys; i++) if ((b->keys[i].code >> 4) == (c->code >> 4) && b->keys[i].col == c->col) { gn += b->keys[i].n; gh += b->keys[i].hits; gp += b->keys[i].pen; }
+                             if (b->stage) for (int i = 0; i < b->stage->nkeys; i++) if ((b->stage->keys[i].code >> 4) == (c->code >> 4) && b->stage->keys[i].col == c->col) { gn += 2 * b->stage->keys[i].n; gh += 2 * b->stage->keys[i].hits; gp += 2 * b->stage->keys[i].pen; } }
+    int proven = 0;
+    if (k && k->n >= 3) { w = (k->hits + 0.3) / (k->n + 1.0); if (w < 0.04) w = 0.04; proven = k->hits >= 3 && k->hits > 0.5 * k->n; }
+    else if (k && k->n > 0) { w = (k->hits + 0.3 + gh) / (k->n + 1.0 + gn); if (w < 0.04) w = 0.04; }
+    else if (gn >= 3) { w = (gh + 0.3) / (gn + 1.0); if (w < 0.04) w = 0.04; proven = gh >= 6 && gh > 0.5 * gn; }
+    if (k && k->pen >= 1 && k->pen >= k->hits) return 0;
+    if (!k && gn >= 3 && gp >= 2 && gp >= gh) return 0;
+    { int miss = 0, hit = 0; for (int i = 0; i < b->nhist; i++) if (g_frame - b->hist[i].f < 400 && abs(b->hist[i].x - c->cx) < 16 && abs(b->hist[i].y - c->cy) < 16 && b->hist[i].code == c->code) { if (b->hist[i].hit) hit++; else miss++; }
+      if (miss >= 2 && hit == 0) w *= 0.03; else if (miss >= 3 && miss > 2 * hit) w *= 0.1; }                                      /* a spot that keeps missing: nothing there to hit */
+    if (c->still > 45 && !proven) w *= 0.12;                                          /* scenery: it has not moved for a while and nothing says shooting it scores */                          /* shooting it cost a life more often than it scored */
+    if (b->stage && b->stage->has_sc) {                                          /* the stage's own rules (written from its rule screen) */
+        const BScene *sc = &b->stage->sc;
+        for (int i = 0; i < sc->na; i++) if (sel_match(&sc->avoid[i], c)) return 0;
+        int pref = 0; for (int i = 0; i < sc->np; i++) if (sel_match(&sc->prefer[i], c)) { if (sc->prefer[i].weight > w || !pref) w = sc->prefer[i].weight; pref = 1; }
+        if (sc->only && !pref) w *= 0.02;
+    }
+    if (b->stage && b->stage->norder) {
+        int idx = -1; for (int i = 0; i < b->stage->norder; i++) if (b->stage->order[i] == c->code) { idx = i; break; }
+        if (idx >= 0) w = idx == g_order_min ? 12.0 : 0.01; else w *= 0.05;
+    }
+    if (b->stage && b->stage->match_sample) { if (g_sample_code >= 0 && c->code != g_sample_code) w *= 0.02; }
     if (b->cur) {
         for (int i = 0; i < b->cur->na; i++) if (sel_match(&b->cur->avoid[i], c)) return 0;
         int pref = 0; for (int i = 0; i < b->cur->np; i++) if (sel_match(&b->cur->prefer[i], c)) { if (b->cur->prefer[i].weight > w || !pref) w = b->cur->prefer[i].weight; pref = 1; }
@@ -133,6 +160,9 @@ void nb1_bot_step(Nb1Bot *b, const Nb1State *st, const Nb1GameInfo *g, unsigned 
         *coin = *start = 0; credits(b, g, frame, coin, start); return;
     }
     static Nb1Entry ents[256]; int ne = nb1_sprite_entries(st, ents); Cand cs[256]; int nc = 0, hit_visible = 0;
+    g_order_min = 1 << 30; g_sample_code = -1; g_frame = frame;
+    if (b->stage && b->stage->norder) for (int i = 0; i < ne; i++) { const Nb1Entry *e = &ents[i]; if (!e->ntiles) continue; int t0 = e->tiles[0].t, code = (((t0 & 0x7ff) | (st->bank[(t0 >> 11) & 7] << 11)) + e->offset) & 0x7fff;
+        for (int q = 0; q < b->stage->norder; q++) if (b->stage->order[q] == code && q < g_order_min) g_order_min = q; }
     unsigned dfr = b->have_aim && frame > b->last_frame ? frame - b->last_frame : 2; if (dfr > 30) dfr = 30; b->last_frame = frame;
     for (int i = 0; i < ne; i++) {
         const Nb1Entry *e = &ents[i]; if (!e->ntiles) continue;
@@ -141,23 +171,44 @@ void nb1_bot_step(Nb1Bot *b, const Nb1State *st, const Nb1GameInfo *g, unsigned 
         if (code >= 6315 && code <= 6334) hit_visible = 1;
         Cand c = { code, e->color, e->pri, (x0 + x1) / 2, (y0 + y1) / 2, x1 - x0, y1 - y0, 0 };
         if (is_hud_code(code) || c.pri >= 6 || c.w < b->d.min_size || c.h < b->d.min_size || c.w > b->d.max_size || c.h > b->d.max_size || c.cx < 3 || c.cx > 284 || c.cy < 3 || c.cy > 220) continue;
+        c.still = 0; for (int q = 0; q < b->nprev; q++) if (b->prev[q].code == c.code && b->prev[q].col == c.col && abs(b->prev[q].cx - c.cx) <= 1 && abs(b->prev[q].cy - c.cy) <= 1) { c.still = b->prev[q].still + (int)dfr; break; }
         c.wt = weight_of(b, &c); if (c.wt > 0) cs[nc++] = c;
     }
-    /* learning: did the last shot score (the game's HIT! marker or the score going up) or cost a life? */
-    if (b->shot_pending && frame - b->shot_frame <= 40) {
-        int hit = (hit_visible && !b->last_hit_visible) || (g && g->valid && g->score - b->last_score >= 15 && g->score - b->last_score < 5000);
-        int pen = g && g->valid && g->lives < b->last_lives;
-        BKey *k = key_get(b, b->shot_code, b->shot_col, 1), *sk = skey_get(b, b->shot_code, b->shot_col, 1);
-        if (pen) { k->pen++; k->n++; if (sk) { sk->pen++; sk->n++; } b->npen++; b->shot_pending = 0; }                              /* a life lost beats a HIT! marker: a bomb or a civilian shows HIT! too */
-        else if (hit) { k->hits++; k->n++; if (sk) { sk->hits++; sk->n++; } b->nhits++; b->shot_pending = 0; }
-    } else if (b->shot_pending) { key_get(b, b->shot_code, b->shot_col, 1)->n++; { BKey *sk = skey_get(b, b->shot_code, b->shot_col, 1); if (sk) sk->n++; } b->shot_pending = 0; }
+    if (getenv("NB1_BOT_DEBUG") && (frame / 2) % 30 == 0) { fprintf(stderr, "bot f%u stage '%s' aim %.0f,%.0f cands:", frame, b->stage ? b->stage->text[0] ? b->stage->text : b->stage->id : "-", b->ax, b->ay); for (int i = 0; i < nc; i++) fprintf(stderr, " [%d:%d p%d %dx%d @%d,%d w%.2f]", cs[i].code, cs[i].col, cs[i].pri, cs[i].w, cs[i].h, cs[i].cx, cs[i].cy, cs[i].wt); fprintf(stderr, "\n"); }
+    /* learning: every shot waits (up to 45 frames) for the game's verdict: the score word rising (a hit) or a life lost (a penalty). A rise is credited to one shot only. */
+    if (g && g->valid && g->lives > b->lives_claimed) b->lives_claimed = 99;                  /* lives went up: a new game */
+    for (int i = 0; i < b->nq; i++) {
+        if (b->q[i].done) continue; unsigned age = frame - b->q[i].f; int hit = 0, pen = 0;
+        if (g && g->valid) { int base = b->q[i].sscore > b->score_claimed ? b->q[i].sscore : b->score_claimed; hit = g->score - base >= 10 && g->score - base < 5000; pen = g->lives < b->q[i].slives && g->lives < b->lives_claimed; }
+        else hit = hit_visible && !b->last_hit_visible && age <= 20;
+        if (hit && age > 16) hit = 0;                                                   /* a hit shows in the score within a few frames: a later rise is some other shot's */
+        if (!pen && !hit && age <= 40) continue;
+        BKey *k = key_get(b, b->q[i].code, b->q[i].col, 1), *sk = skey_get(b, b->q[i].code, b->q[i].col, 1);
+        k->n++; if (sk) sk->n++;
+        if (pen) { k->pen++; if (sk) sk->pen++; b->npen++; if (g) b->lives_claimed = g->lives; }
+        else if (hit) { k->hits++; if (sk) sk->hits++; b->nhits++; if (g) b->score_claimed = g->score; }
+        if (getenv("NB1_BOT_DEBUG")) fprintf(stderr, "shot f%u %s code %d:%d at %d,%d v %.1f,%.1f err %.1f  %s\n", b->q[i].f, b->stage ? b->stage->id : "-", b->q[i].code, b->q[i].col, b->q[i].x, b->q[i].y, b->q[i].vx, b->q[i].vy, b->q[i].err, pen ? "PENALTY" : hit ? "hit" : "miss");
+        b->hist[b->hist_head % 32].x = b->q[i].x; b->hist[b->hist_head % 32].y = b->q[i].y; b->hist[b->hist_head % 32].code = b->q[i].code; b->hist[b->hist_head % 32].hit = hit; b->hist[b->hist_head % 32].f = b->q[i].f; b->hist_head++; if (b->nhist < 32) b->nhist++;
+        b->q[i].done = 1;
+    }
+    { int w = 0; for (int i = 0; i < b->nq; i++) if (!b->q[i].done) b->q[w++] = b->q[i]; b->nq = w; }
     b->last_hit_visible = hit_visible; if (g && g->valid) { b->last_score = g->score; b->last_lives = g->lives; }
+    for (int i = 0; i < nc; i++) {                                                /* one target drawn as several sprite entries (head and body): merge entries that touch */
+        if (cs[i].wt < 0.25) continue;
+        for (int j = i + 1; j < nc; j++) { if (cs[j].wt < 0.25) continue;
+            int ax0 = cs[i].cx - cs[i].w / 2 - 4, ax1 = cs[i].cx + cs[i].w / 2 + 4, ay0 = cs[i].cy - cs[i].h / 2 - 4, ay1 = cs[i].cy + cs[i].h / 2 + 4, bx0 = cs[j].cx - cs[j].w / 2, bx1 = cs[j].cx + cs[j].w / 2, by0 = cs[j].cy - cs[j].h / 2, by1 = cs[j].cy + cs[j].h / 2;
+            if (ax1 < bx0 || bx1 < ax0 || ay1 < by0 || by1 < ay0) continue;
+            int ux0 = (ax0 + 4 < bx0 ? ax0 + 4 : bx0), ux1 = (ax1 - 4 > bx1 ? ax1 - 4 : bx1), uy0 = (ay0 + 4 < by0 ? ay0 + 4 : by0), uy1 = (ay1 - 4 > by1 ? ay1 - 4 : by1);
+            if (ux1 - ux0 > 96 || uy1 - uy0 > 112) continue;
+            if (cs[j].wt > cs[i].wt) { cs[i].code = cs[j].code; cs[i].col = cs[j].col; cs[i].wt = cs[j].wt; cs[i].pri = cs[j].pri; }
+            cs[i].cx = (ux0 + ux1) / 2; cs[i].cy = (uy0 + uy1) / 2; cs[i].w = ux1 - ux0; cs[i].h = uy1 - uy0; cs[j] = cs[--nc]; j = i; }
+    }
     /* choose the target: keep the current one while it is still there and has not had its chances */
     Cand *pick = NULL; double best = -1;
     for (int i = 0; i < nc; i++) {
         Cand *c = &cs[i]; double dx = c->cx - b->ax, dy = c->cy - b->ay, dist = sqrt(dx * dx + dy * dy), s = c->wt / (1.0 + dist / 90.0);
         if (b->have_target && c->code == b->cur_code && c->col == b->cur_col && abs(c->cx - b->cur_cx) < 40 && abs(c->cy - b->cur_cy) < 40) s *= (b->target_shots >= 3 ? 0.1 : 2.5);
-        else if (c->code == b->shot_code && c->col == b->shot_col && frame - b->shot_frame < 90 && abs(c->cx - b->cur_cx) < 24 && abs(c->cy - b->cur_cy) < 24) s *= 0.15;   /* just shot, still there */
+        if (!(b->stage && b->stage->multihit)) for (int q = 0; q < b->nrs; q++) if (frame - b->rs[q].f < 50 && abs(c->cx - b->rs[q].x) < 26 && abs(c->cy - b->rs[q].y) < 26) { s *= 0.04; break; }      /* just shot there: it is falling or gone */
         { unsigned h = (b->rng ^ (unsigned)(c->code * 40503 + c->col * 977)) * 2654435761u; h ^= h >> 15; h *= 2246822519u; s *= 0.75 + 0.5 * ((h >> 8) & 0xff) / 255.0; }     /* a fixed per-run factor for each sprite type, so runs differ (which stage card they pick) but a pick never flips back and forth */
         if (s > best) { best = s; pick = c; }
     }
@@ -166,15 +217,15 @@ void nb1_bot_step(Nb1Bot *b, const Nb1State *st, const Nb1GameInfo *g, unsigned 
         b->have_target = 1; b->cur_code = pick->code; b->cur_col = pick->col; b->cur_cx = pick->cx; b->cur_cy = pick->cy;
         double vx = 0, vy = 0;                                                 /* a moving target: lead it by its speed over the last state */
         for (int i = 0; i < b->nprev; i++) if (b->prev[i].code == pick->code && abs(b->prev[i].cx - pick->cx) < 30 && abs(b->prev[i].cy - pick->cy) < 30) { vx = (pick->cx - b->prev[i].cx) / (double)dfr; vy = (pick->cy - b->prev[i].cy) / (double)dfr; break; }
-        double tx = pick->cx + vx * 6, ty = pick->cy + vy * 6;
+        double tx = pick->cx + vx * b->d.lead, ty = pick->cy + vy * b->d.lead;
         if (!b->have_aim) { b->ax = tx; b->ay = ty; b->have_aim = 1; }
         double dx = tx - b->ax, dy = ty - b->ay, dist = sqrt(dx * dx + dy * dy), step = b->d.speed * dfr; if (dist > step) { dx *= step / dist; dy *= step / dist; }
         b->ax += dx; b->ay += dy;
         double ex = tx - b->ax, ey = ty - b->ay;
         if (b->trig_left > 0) { b->trig_left -= (int)dfr; }
         else if (b->gap_left > 0) { b->gap_left -= (int)dfr; }
-        else if (ex * ex + ey * ey < 5.0 * 5.0 && st) { b->trig_left = (int)b->d.hold; b->gap_left = (int)b->d.gap; b->shot_code = pick->code; b->shot_col = pick->col; b->shot_frame = frame; b->shot_pending = 1; b->target_shots++; b->nshots++;
-                                                         if (g && g->valid) { b->last_score = g->score; b->last_lives = g->lives; } }
+        else if (ex * ex + ey * ey < 5.0 * 5.0 && st && pick->wt >= b->d.fire_min) { b->trig_left = (int)b->d.hold; b->gap_left = (int)b->d.gap; b->shot_code = pick->code; b->shot_col = pick->col; b->shot_frame = frame; if (b->nq < 8) { b->q[b->nq].f = frame; b->q[b->nq].code = pick->code; b->q[b->nq].col = pick->col; b->q[b->nq].x = pick->cx; b->q[b->nq].y = pick->cy; b->q[b->nq].vx = vx; b->q[b->nq].vy = vy; b->q[b->nq].err = sqrt(ex * ex + ey * ey); b->q[b->nq].sscore = g && g->valid ? g->score : 0; b->q[b->nq].slives = g && g->valid ? g->lives : 9; b->q[b->nq].done = 0; b->nq++; } for (int q = 7; q > 0; q--) b->rs[q] = b->rs[q - 1]; b->rs[0].x = pick->cx; b->rs[0].y = pick->cy; b->rs[0].f = frame; if (b->nrs < 8) b->nrs++; b->shot_pending = 1; b->target_shots++; b->nshots++;
+                                                         if (g && g->valid) { b->last_score = g->score; b->last_lives = g->lives; b->shot_score = g->score; b->shot_lives = g->lives; } }
         snprintf(b->status, sizeof b->status, "auto: target code %d col %d (w %.2f)  shots %u hits %u penalties %u", pick->code, pick->col, pick->wt, b->nshots, b->nhits, b->npen);
     } else {
         b->have_target = 0; if (!b->have_aim) { b->ax = 144; b->ay = 112; b->have_aim = 1; }
