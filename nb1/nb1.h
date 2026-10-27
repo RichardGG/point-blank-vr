@@ -64,10 +64,26 @@ void nb1_bot_free(Nb1Bot *b);
 void nb1_bot_set_scene(Nb1Bot *b, const char *table_name);       /* the depth table / scene family in use: selects the per-scene rules */
 void nb1_bot_step(Nb1Bot *b, const Nb1State *sprite_state, const Nb1GameInfo *game, unsigned frame, double *sx, double *sy, int *trigger, int *coin, int *start);
 const char *nb1_bot_status(const Nb1Bot *b);
+void nb1_bot_set_stage(Nb1Bot *b, const char *id);               /* name the stage (e.g. the rule banner's sentence): its own statistics are used and kept; NULL / "" = from the game's stage counters */
 void nb1_bot_set_seed(Nb1Bot *b, unsigned seed);
 void nb1_bot_set_mode(Nb1Bot *b, int mode);                  /* 0 = whatever it likes, 1 training, 2 beginner, 3 expert, 4 very hard: which button to shoot on the mode screen */
 int  nb1_bot_key(const Nb1Bot *b, int i, int *code, int *col, double *n, double *hits, double *pen);   /* what it has learned so far, one sprite type at a time */
 int  nb1_bot_save_stats(const Nb1Bot *b, const char *path);    /* what it learned while playing: [[code, colour, shots, hits, penalties], ...] (the format of the rules file's "keys") */
+
+/* ---- game-flow tracker: where the game is and which stage it is (see nb1_flow.c). dir = research/data/flow (banners.json + banners.bin, made by make_banners.py). */
+enum { NB1_FLOW_ATTRACT = 0, NB1_FLOW_CARD_SELECT, NB1_FLOW_INTRO, NB1_FLOW_PLAY, NB1_FLOW_JUDGEMENT };
+typedef struct Nb1Flow Nb1Flow;
+Nb1Flow *nb1_flow_load(const char *dir);
+void nb1_flow_free(Nb1Flow *f);
+/* call for every new state; roms are needed to read the banner; table_name = what the art selector chose for this state */
+void nb1_flow_step(Nb1Flow *f, const Nb1State *st, const Nb1Roms *roms, const Nb1GameInfo *g, const char *table_name, unsigned frame);
+int  nb1_flow_phase(const Nb1Flow *f);
+int  nb1_flow_type(const Nb1Flow *f);                 /* index of the stage's banner, -1 none yet, -2 a banner without a reference */
+const char *nb1_flow_text(const Nb1Flow *f);          /* "SHOOT 28 NINJAS OR MORE." */
+const char *nb1_flow_goal(const Nb1Flow *f);
+const char *nb1_flow_world(const Nb1Flow *f);         /* the depth table this stage is played with (learned), or NULL */
+const char *nb1_flow_locked_table(const Nb1Flow *f);  /* while playing: the table the selector chose most often so far in this stage, or NULL */
+int  nb1_flow_unknown(Nb1Flow *f, uint8_t *strip);    /* a banner with no reference was seen: its 140 x 16 RGB strip (once) */
 
 /* ---- depth table (JSON; the same format as the Python tool, including "edits") */
 typedef struct Nb1Table Nb1Table;
@@ -88,6 +104,7 @@ typedef struct Nb1TableSet Nb1TableSet;
 Nb1TableSet *nb1_tableset_load(const char *scene_tables_json);          /* loads every table it names; NULL on error */
 const Nb1Table *nb1_tableset_select(const Nb1TableSet *ts, const Nb1State *st, const Nb1State *sst, const char **name);   /* NULL = none matches */
 void nb1_tableset_free(Nb1TableSet *ts);
+const Nb1Table *nb1_tableset_by_name(const Nb1TableSet *ts, const char *name);   /* the table of the entry with this name (as in scene_tables.json), or NULL */
 /* Give the table set the ROMs so that art matches also compare the picture (a 16 x 11 thumbnail kept in scene_refs.json): equal tile codes alone can be leftovers. */
 void nb1_tableset_set_roms(Nb1TableSet *ts, const Nb1Roms *roms);
 /* Stable table choice for a video stream: nb1_tableset_select() can flip from frame to frame (a sprite that a rule looks for comes and goes), and

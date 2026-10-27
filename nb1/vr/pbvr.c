@@ -130,7 +130,7 @@ typedef struct {
     SDL_mutex *mu; GlScene back; int ready; unsigned back_frame; const char *back_table; int back_scene; double back_sim;
     volatile int quit, paused, rebuild; volatile double zs; Source src;
     OvEntry *ov; int nov, capov; SurAdj *adj; int nadj, capadj; volatile double hud_dy;                       /* the editor's edits, guarded by mu */
-    Nb1Bot *bot; volatile int auto_on; volatile double bot_sx, bot_sy; volatile int bot_trig, bot_coin, bot_start, bot_valid; char bot_status[200];
+    Nb1Flow *flow; volatile int flow_phase; char flow_text[170]; Nb1Bot *bot; volatile int auto_on; volatile double bot_sx, bot_sy; volatile int bot_trig, bot_coin, bot_start, bot_valid; char bot_status[200];
     int prev_scroll[4][2], moving[4]; SceneEnt *scenes; int nscenes, live; const char *scenes_dir; volatile int goto_idx; Nb1Selector *selr; const Nb1Table *last_use; Nb1State *last; unsigned last_frame; const char *last_name; int last_scene; double last_sim;   /* the state the current scene came from, so an edit can rebuild it */
 } Worker;
 
@@ -162,6 +162,14 @@ static int worker_main(void *arg) {
             name = w->last_name;
         }
         w->last_name = name;
+        if (w->flow && st && !frozen) {                                      /* the game-flow tracker: phase and stage; at the start of play the stage's known depth table is used until the art selector has settled */
+            Nb1GameInfo gi2; memset(&gi2, 0, sizeof gi2); char gp2[1100]; size_t gn2; snprintf(gp2, sizeof gp2, "%s/game.txt", w->src.ipc); uint8_t *gb2 = slurp(gp2, &gn2);
+            if (gb2) { gb2 = realloc(gb2, gn2 + 1); gb2[gn2] = 0; unsigned gf; int l, sc, m, sg, d, cd = 0; if (sscanf((char *)gb2, "%u %d %d %d %d %d %d", &gf, &l, &sc, &m, &sg, &d, &cd) >= 6) { gi2.valid = 1; gi2.lives = l; gi2.score = sc; gi2.mode = m; gi2.stage = sg; gi2.diff = d; gi2.card = cd; } free(gb2); }
+            nb1_flow_step(w->flow, st, w->roms, &gi2, name, fr); w->flow_phase = nb1_flow_phase(w->flow);
+            SDL_LockMutex(w->mu); snprintf(w->flow_text, sizeof w->flow_text, "%s", nb1_flow_type(w->flow) != -1 ? nb1_flow_text(w->flow) : ""); SDL_UnlockMutex(w->mu);
+            if (!w->tab && w->tset && nb1_flow_phase(w->flow) == NB1_FLOW_PLAY && !nb1_flow_locked_table(w->flow) && nb1_flow_world(w->flow)) { const Nb1Table *wt = nb1_tableset_by_name(w->tset, nb1_flow_world(w->flow)); if (wt) { use = wt; name = nb1_flow_world(w->flow); } }
+            else if (!w->tab && w->tset && nb1_flow_phase(w->flow) == NB1_FLOW_PLAY && nb1_flow_locked_table(w->flow)) { const Nb1Table *wt = nb1_tableset_by_name(w->tset, nb1_flow_locked_table(w->flow)); if (wt) { use = wt; name = nb1_flow_locked_table(w->flow); } }
+        }
         if (w->bot && st && !frozen) {                                       /* the auto-player sees every new state (the arcade's own sprite list) */
             Nb1GameInfo gi; memset(&gi, 0, sizeof gi); char gp[1100]; size_t gn; snprintf(gp, sizeof gp, "%s/game.txt", w->src.ipc); uint8_t *gb = slurp(gp, &gn);
             if (gb) { gb = realloc(gb, gn + 1); gb[gn] = 0; unsigned gf; int l, sc, m, sg, d; if (sscanf((char *)gb, "%u %d %d %d %d %d", &gf, &l, &sc, &m, &sg, &d) == 6) { gi.valid = 1; gi.lives = l; gi.score = sc; gi.mode = m; gi.stage = sg; gi.diff = d; } free(gb); }
@@ -451,6 +459,7 @@ int main(int argc, char **argv) {
     {                                                                                                              /* the auto-player (always built; it only acts while switched on) */
         char rp[1100]; if (o.bot_rules[0]) snprintf(rp, sizeof rp, "%s", o.bot_rules); else { char dir[1000]; snprintf(dir, sizeof dir, "%s", o.tables[0] ? o.tables : "./x"); char *s1 = strrchr(dir, '/'), *s2 = strrchr(dir, '\\'), *sl = s1 > s2 ? s1 : s2; if (sl) *sl = 0; else strcpy(dir, "."); snprintf(rp, sizeof rp, "%s/../bot_rules.json", dir); }
         W.bot = nb1_bot_new(rp); W.auto_on = o.auto_on;
+        { char dir[1000]; snprintf(dir, sizeof dir, "%s", o.tables[0] ? o.tables : "./x"); char *s1 = strrchr(dir, '/'), *s2 = strrchr(dir, '\\'), *sl = s1 > s2 ? s1 : s2; if (sl) *sl = 0; else strcpy(dir, "."); char fp[1100]; snprintf(fp, sizeof fp, "%s/../flow", dir); W.flow = nb1_flow_load(fp); if (!W.flow) fprintf(stderr, "pbvr: no stage tracker data in %s (the stage name and phase are not shown)\n", fp); }
     }
     double vw_m = o.sdiag * 0.0254 * 0.8 * o.vscale, zs = (NB1_W * o.sdist / vw_m) / NB1_FOCAL; W.zs = zs;
     SceneEnt *scn = NULL; int nscn = 0, scn_idx = 0; char load_name[64] = ""; int load_seq = 0; char scene_desc[260] = "";
@@ -700,7 +709,8 @@ int main(int argc, char **argv) {
         } else if (t < msg_until) {                                           /* a short note while playing: the scene just jumped to */
             panel_set(&panel, 0, scn ? scene_desc : ""); panel_set(&panel, 1, ""); panel_set(&panel, 2, ""); panel_set(&panel, 3, msg);
         }
-        { char nm[320]; if (scn) snprintf(nm, sizeof nm, "%s   table: %s", scene_desc, table_name ? table_name : "default"); else snprintf(nm, sizeof nm, "SCENE #%d (%.0f%% art match)   table: %s", cur_scene, cur_sim * 100, table_name ? table_name : "default"); if (W.auto_on) { SDL_LockMutex(W.mu); size_t L = strlen(nm); snprintf(nm + L, sizeof nm - L, "     %s", W.bot_status[0] ? W.bot_status : "auto: starting"); SDL_UnlockMutex(W.mu); }
+        { char nm[320]; if (scn) snprintf(nm, sizeof nm, "%s   table: %s", scene_desc, table_name ? table_name : "default"); else snprintf(nm, sizeof nm, "SCENE #%d (%.0f%% art match)   table: %s", cur_scene, cur_sim * 100, table_name ? table_name : "default"); if (W.flow_text[0]) { SDL_LockMutex(W.mu); size_t L = strlen(nm); static const char *PH[5] = { "attract", "choosing", "rules", "playing", "result" }; snprintf(nm + L, sizeof nm - L, "     STAGE: %s  [%s]", W.flow_text, PH[W.flow_phase > 4 ? 0 : W.flow_phase]); SDL_UnlockMutex(W.mu); }
+            if (W.auto_on) { SDL_LockMutex(W.mu); size_t L = strlen(nm); snprintf(nm + L, sizeof nm - L, "     %s", W.bot_status[0] ? W.bot_status : "auto: starting"); SDL_UnlockMutex(W.mu); }
             panel_set(&namep, 0, o.no_labels ? "" : nm); }
         /* render */
         if (!o.no_vr) {

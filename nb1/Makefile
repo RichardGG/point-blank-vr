@@ -1,6 +1,6 @@
 CC ?= cc
 CFLAGS ?= -O2 -std=c11 -D_GNU_SOURCE -ffp-contract=off -Wall -Wextra
-SRC = nb1_video.c nb1_scene.c nb1_table.c nb1_edits.c nb1_png.c nb1_json.c nb1_surround.c nb1_sprites.c nb1_bot.c
+SRC = nb1_video.c nb1_scene.c nb1_table.c nb1_edits.c nb1_png.c nb1_json.c nb1_surround.c nb1_sprites.c nb1_bot.c nb1_flow.c
 UNAME := $(shell uname -s)
 
 # SDL2 for the desktop viewer: sdl2-config, or pkg-config, also looking where Homebrew puts them

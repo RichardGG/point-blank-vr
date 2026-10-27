@@ -190,6 +190,7 @@ typedef struct { char name[64]; Nb1Table *table; int ncodes_all, ncodes_any, nar
 #define THUMB_MAX_MAE 50
 typedef struct { int id; int n; uint32_t *keys; int has_thumb; int16_t thumb[THUMB_ROWS * THUMB_COLS * 3]; } Ref;          /* keys: layer << 20 | tile code, sorted */
 struct Nb1TableSet { int nrules; SetRule *rules; int nrefs; Ref *refs; const Nb1Roms *roms; };
+const Nb1Table *nb1_tableset_by_name(const Nb1TableSet *ts, const char *name) { if (ts && name) for (int i = 0; i < ts->nrules; i++) if (!strcmp(ts->rules[i].name, name)) return ts->rules[i].table; return NULL; }
 void nb1_tableset_set_roms(Nb1TableSet *ts, const Nb1Roms *roms) { if (ts) ts->roms = roms; }
 /* 16 x 11 block averages of the arcade composite above the HUD band: the same definition as depthscene.thumb() */
 static void live_thumb(const Nb1State *st, const Nb1State *sst, const Nb1Roms *roms, int16_t *out) {

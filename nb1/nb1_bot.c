@@ -14,7 +14,7 @@
 typedef struct { int code_lo, code_hi, col_lo, col_hi, pri_lo, pri_hi; double weight; } BSel;
 typedef struct { char name[64]; int only; BSel *prefer, *avoid; int np, na; } BScene;
 typedef struct { int code, col; double n, hits, pen; } BKey;
-typedef struct { char id[24]; char text[160]; BKey *keys; int nkeys, cap; } BStage;       /* what one stage (difficulty, stage counter, card) has taught: its own sprite statistics and the sentence the game shows before it */
+typedef struct { char id[160]; char text[160]; BKey *keys; int nkeys, cap; } BStage;       /* what one stage (difficulty, stage counter, card) has taught: its own sprite statistics and the sentence the game shows before it */
 typedef struct { int code, col, pri, cx, cy, w, h; double wt; } Cand;
 typedef struct { double min_size, max_size, unknown, speed, gap, hold; } BDef;
 
@@ -26,7 +26,7 @@ struct Nb1Bot {
     int shot_code, shot_col; unsigned shot_frame; int shot_pending;
     int last_score, last_lives, last_hit_visible; unsigned last_coin, last_start;
     Cand prev[64]; int nprev;
-    char status[160]; unsigned nshots, nhits, npen; int want_mode;
+    char status[160]; unsigned nshots, nhits, npen; int want_mode; char stage_override[160];
 };
 
 static int sel_parse(const Json *a, BSel **out) {
@@ -84,6 +84,7 @@ void nb1_bot_set_scene(Nb1Bot *b, const char *name) {
 }
 const char *nb1_bot_status(const Nb1Bot *b) { return b->status; }
 void nb1_bot_set_mode(Nb1Bot *b, int mode) { b->want_mode = mode; }
+void nb1_bot_set_stage(Nb1Bot *b, const char *id) { snprintf(b->stage_override, sizeof b->stage_override, "%s", id ? id : ""); }
 void nb1_bot_set_seed(Nb1Bot *b, unsigned seed) { b->rng = seed * 2654435761u + 1; }
 int nb1_bot_key(const Nb1Bot *b, int i, int *code, int *col, double *n, double *hits, double *pen) {
     if (i < 0 || i >= b->nkeys) return 0; *code = b->keys[i].code; *col = b->keys[i].col; *n = b->keys[i].n; *hits = b->keys[i].hits; *pen = b->keys[i].pen; return 1;
@@ -120,7 +121,7 @@ static void credits(Nb1Bot *b, const Nb1GameInfo *g, unsigned frame, int *coin, 
 }
 
 void nb1_bot_step(Nb1Bot *b, const Nb1State *st, const Nb1GameInfo *g, unsigned frame, double *sx, double *sy, int *trig, int *coin, int *start) {
-    if (g && g->valid) { char id[24]; snprintf(id, sizeof id, "d%d_n%d_c%d", g->diff, g->stage, g->card); if (!b->stage || strcmp(b->stage->id, id)) {
+    if (b->stage_override[0] || (g && g->valid)) { char id[160]; if (b->stage_override[0]) snprintf(id, sizeof id, "%s", b->stage_override); else snprintf(id, sizeof id, "d%d_n%d_c%d", g->diff, g->stage, g->card); if (!b->stage || strcmp(b->stage->id, id)) {
         b->stage = NULL; for (int i = 0; i < b->nstages; i++) if (!strcmp(b->stages[i].id, id)) b->stage = &b->stages[i];
         if (!b->stage) { b->stages = realloc(b->stages, (size_t)(b->nstages + 1) * sizeof *b->stages); BStage *ns = &b->stages[b->nstages++]; memset(ns, 0, sizeof *ns); snprintf(ns->id, sizeof ns->id, "%s", id); b->stage = ns; } } }
     /* the mode screen (after Start): shoot the wanted button (1 training, 2 beginner, 3 expert, 4 very hard), and nothing else until the game has taken it (stage counter leaves 0) */
