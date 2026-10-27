@@ -55,6 +55,17 @@ int  nb1_sprlib_info(const Nb1SprLib *L, int id, int *ncols, int *nrows, int *np
 int  nb1_sprlib_frame_tex(const Nb1SprLib *L, const Nb1Roms *roms, int id, int palette_variant, Nb1Tex *out);
 int  nb1_sprlib_tiles_tex(const Nb1SprLib *L, const Nb1Roms *roms, int first_tile, int ncols, int nrows, Nb1Tex *out);
 
+/* ---- auto-player. Feed it every new sprite state; it returns where to aim (arcade pixels) and whether to hold the trigger.
+ * rules: research/data/bot_rules.json (NULL = built-in defaults). game: the game's own numbers if known (valid = 0 otherwise). */
+typedef struct Nb1Bot Nb1Bot;
+typedef struct { int valid, lives, score, mode, stage, diff; } Nb1GameInfo;
+Nb1Bot *nb1_bot_new(const char *rules_path);
+void nb1_bot_free(Nb1Bot *b);
+void nb1_bot_set_scene(Nb1Bot *b, const char *table_name);       /* the depth table / scene family in use: selects the per-scene rules */
+void nb1_bot_step(Nb1Bot *b, const Nb1State *sprite_state, const Nb1GameInfo *game, unsigned frame, double *sx, double *sy, int *trigger, int *coin, int *start);
+const char *nb1_bot_status(const Nb1Bot *b);
+int  nb1_bot_save_stats(const Nb1Bot *b, const char *path);    /* what it learned while playing: [[code, colour, shots, hits, penalties], ...] (the format of the rules file's "keys") */
+
 /* ---- depth table (JSON; the same format as the Python tool, including "edits") */
 typedef struct Nb1Table Nb1Table;
 Nb1Table *nb1_table_default(void);

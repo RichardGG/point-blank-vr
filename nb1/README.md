@@ -106,3 +106,8 @@ The long runs are `tools/mame/trace.lua` with `PB_HARVEST` (video-state dumps), 
 `nb1_sprlib_load`, `nb1_sprlib_frame_tex` (a frame with one of its palettes) and `nb1_sprlib_tiles_tex` (any run of ROM tiles, any grid; palette of the nearest seen tile, grey if none) return `Nb1Tex`, like `nb1_entry_tex`.
 `nb1_tool sprlib LIB ROMS OUT [tiles FIRST NCOLS NROWS]` writes them out. The C and Python renderings of all frames are identical.
 Not extracted: the shapes and palettes of the other 6,688 non-empty tiles (the game's composition data is not stored verbatim in the program ROM; the library keeps a guess in `guess.json` that is about 75% right on known sprites).
+
+## Auto-player
+
+`nb1_bot.c` plays the game from the arcade's own sprite list (see `nb1.h`, `nb1_bot_*`): it picks a target by weight (hit rate of that sprite code and palette colour, per-scene preferences and avoid lists, distance), leads moving targets, fires with a gap between shots and learns from the HIT! marker, the score word and lost lives. Rules: `research/data/bot_rules.json`, made by `research/tools/bot/make_rules.py` from `probe.lua` (shoots every sprite of every captured scene and logs what happened). Used by `pbvr --auto` and the windowless `pbbot`.
+Measured here (MAME, 3 minutes of play, real lives): it reaches stage 3 to 4, about 250 shots and 44 hits; it is a competent but not a good player. The per-stage rules are the weak part: only the gulls-above-the-lifeboat rule is hand-written (from the sprite sheet, unverified), the rest is learned hit rates.

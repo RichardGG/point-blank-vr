@@ -121,7 +121,7 @@ typedef struct { int kind, id, pri, has_key, key; } SelItem;     /* what the poi
 /* ------------------------------------------------------------------ options */
 typedef struct {
     char roms[512], ipc[512], table[512], tables[512];
-    double vscale, sdiag, sdist, gun_pitch, aim_yaw, aim_pitch, jump_dist; int no_labels; int no_vr, gaze, no_surround, scene_start, live, no_brackets, hud_flat; double hud_below; char edits_out[512], scenes[512];
+    double vscale, sdiag, sdist, gun_pitch, aim_yaw, aim_pitch, jump_dist; int no_labels, auto_on; char bot_rules[512], bot_stats[512]; int no_vr, gaze, no_surround, scene_start, live, no_brackets, hud_flat; double hud_below; char edits_out[512], scenes[512];
 } Opts;
 
 /* ------------------------------------------------------------------ scene worker: reads states and builds scenes off the render thread */
@@ -130,6 +130,7 @@ typedef struct {
     SDL_mutex *mu; GlScene back; int ready; unsigned back_frame; const char *back_table; int back_scene; double back_sim;
     volatile int quit, paused, rebuild; volatile double zs; Source src;
     OvEntry *ov; int nov, capov; SurAdj *adj; int nadj, capadj; volatile double hud_dy;                       /* the editor's edits, guarded by mu */
+    Nb1Bot *bot; volatile int auto_on; volatile double bot_sx, bot_sy; volatile int bot_trig, bot_coin, bot_start, bot_valid; char bot_status[200];
     int prev_scroll[4][2], moving[4]; SceneEnt *scenes; int nscenes, live; const char *scenes_dir; volatile int goto_idx; Nb1Selector *selr; const Nb1Table *last_use; Nb1State *last; unsigned last_frame; const char *last_name; int last_scene; double last_sim;   /* the state the current scene came from, so an edit can rebuild it */
 } Worker;
 
@@ -161,6 +162,14 @@ static int worker_main(void *arg) {
             name = w->last_name;
         }
         w->last_name = name;
+        if (w->bot && st && !frozen) {                                       /* the auto-player sees every new state (the arcade's own sprite list) */
+            Nb1GameInfo gi; memset(&gi, 0, sizeof gi); char gp[1100]; size_t gn; snprintf(gp, sizeof gp, "%s/game.txt", w->src.ipc); uint8_t *gb = slurp(gp, &gn);
+            if (gb) { gb = realloc(gb, gn + 1); gb[gn] = 0; unsigned gf; int l, sc, m, sg, d; if (sscanf((char *)gb, "%u %d %d %d %d %d", &gf, &l, &sc, &m, &sg, &d) == 6) { gi.valid = 1; gi.lives = l; gi.score = sc; gi.mode = m; gi.stage = sg; gi.diff = d; } free(gb); }
+            nb1_bot_set_scene(w->bot, name);
+            double bsx, bsy; int bt, bc, bs; nb1_bot_step(w->bot, st, &gi, fr, &bsx, &bsy, &bt, &bc, &bs);
+            if (w->auto_on) { w->bot_sx = bsx; w->bot_sy = bsy; w->bot_trig = bt; w->bot_coin = bc; w->bot_start = bs; w->bot_valid = 1; }
+            SDL_LockMutex(w->mu); snprintf(w->bot_status, sizeof w->bot_status, "%s", nb1_bot_status(w->bot)); SDL_UnlockMutex(w->mu);
+        }
         Nb1ScaleSpec specs[64]; int ns = 0;
         SDL_LockMutex(w->mu);
         for (int i = 0; i < w->nov && ns < 64; i++) if (w->ov[i].scene == w->last_scene && w->ov[i].s.k != 1.0) specs[ns++] = w->ov[i].s;
@@ -390,6 +399,9 @@ int main(int argc, char **argv) {
         else if (!strcmp(a, "--gun-pitch") && v) { o.gun_pitch = atof(v); i++; }
         else if (!strcmp(a, "--no-vr")) o.no_vr = 1;
         else if (!strcmp(a, "--no-surround")) o.no_surround = 1;
+        else if (!strcmp(a, "--auto")) o.auto_on = 1;                                                           /* the auto-player starts on (T key, or squeeze both grips for a second, toggles it) */
+        else if (!strcmp(a, "--bot-rules") && v) { snprintf(o.bot_rules, sizeof o.bot_rules, "%s", v); i++; }   /* default: bot_rules.json beside the tables folder */
+        else if (!strcmp(a, "--bot-stats") && v) { snprintf(o.bot_stats, sizeof o.bot_stats, "%s", v); i++; }   /* what the player learned, written when it exits */
         else if (!strcmp(a, "--no-labels")) o.no_labels = 1;                                                  /* no scene name under the picture, no names on the HUD sprites */
         else if (!strcmp(a, "--no-brackets")) o.no_brackets = 1;                                              /* no white corner marks round the play window */
         else if (!strcmp(a, "--hud-overlay")) o.hud_flat = 1;                                                  /* keep the HUD on the picture (default: moved below it) */
@@ -436,6 +448,10 @@ int main(int argc, char **argv) {
     if (o.table[0]) { W.tab = nb1_table_load(o.table); if (!W.tab) fprintf(stderr, "pbvr: cannot load table %s\n", o.table); }
     else if (o.tables[0]) { W.tset = nb1_tableset_load(o.tables); if (!W.tset) fprintf(stderr, "pbvr: cannot load tables %s\n", o.tables); else { nb1_tableset_set_roms(W.tset, &roms); W.selr = nb1_selector_new(W.tset, 3); } }
     snprintf(W.src.ipc, sizeof W.src.ipc, "%s", o.ipc);
+    {                                                                                                              /* the auto-player (always built; it only acts while switched on) */
+        char rp[1100]; if (o.bot_rules[0]) snprintf(rp, sizeof rp, "%s", o.bot_rules); else { char dir[1000]; snprintf(dir, sizeof dir, "%s", o.tables[0] ? o.tables : "./x"); char *s1 = strrchr(dir, '/'), *s2 = strrchr(dir, '\\'), *sl = s1 > s2 ? s1 : s2; if (sl) *sl = 0; else strcpy(dir, "."); snprintf(rp, sizeof rp, "%s/../bot_rules.json", dir); }
+        W.bot = nb1_bot_new(rp); W.auto_on = o.auto_on;
+    }
     double vw_m = o.sdiag * 0.0254 * 0.8 * o.vscale, zs = (NB1_W * o.sdist / vw_m) / NB1_FOCAL; W.zs = zs;
     SceneEnt *scn = NULL; int nscn = 0, scn_idx = 0; char load_name[64] = ""; int load_seq = 0; char scene_desc[260] = "";
     if (o.scenes[0]) {
@@ -474,6 +490,7 @@ int main(int argc, char **argv) {
             else if (ev.type == SDL_KEYDOWN && !ev.key.repeat) switch (ev.key.keysym.sym) {
                 case SDLK_ESCAPE: fprintf(stderr, "pbvr: ESC pressed\n"); running = 0; break;
                 case SDLK_c: kcoin = 1; break; case SDLK_v: kstart = 1; break;
+                case SDLK_t: W.auto_on = !W.auto_on; snprintf(msg, sizeof msg, "auto-player %s", W.auto_on ? "ON" : "off"); msg_until = now_s() + 3; break;
                 case SDLK_p: paused = !paused; break; case SDLK_r: need_recenter = 1; break;
                 case SDLK_LEFTBRACKET: o.vscale /= 1.1; break; case SDLK_RIGHTBRACKET: o.vscale *= 1.1; break;
                 case SDLK_RETURN: inj_sel = 1; break; case SDLK_g: inj_sq = 1; break; case SDLK_j: inj_a = 1; break; case SDLK_s: inj_b = 1; break; case SDLK_x: inj_x = 1; break; case SDLK_y: inj_y = 1; break;
@@ -526,6 +543,8 @@ int main(int argc, char **argv) {
             }
             prev_trig[0] = trg[0]; prev_trig[1] = trg[1]; trig = trg[active_hand]; coin = cn | kcoin; start = st | kstart;
             if (paused) trig = coin = start = 0;                       /* the game is stopped; the buttons edit instead */
+            { static double both_since = 0; if (!paused && in_sq[0] && in_sq[1]) { if (both_since == 0) both_since = now_s(); else if (now_s() - both_since > 0.8) { W.auto_on = !W.auto_on; both_since = -1e9; snprintf(msg, sizeof msg, "auto-player %s", W.auto_on ? "ON" : "off"); msg_until = now_s() + 3; } }
+              else if (!(in_sq[0] && in_sq[1])) both_since = 0; }
             /* views */
             XrViewLocateInfo li = { XR_TYPE_VIEW_LOCATE_INFO }; li.viewConfigurationType = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO; li.displayTime = fs.predictedDisplayTime; li.space = xr.local;
             XrViewState vs = { XR_TYPE_VIEW_STATE }; for (int i = 0; i < 2; i++) xr.views[i].type = XR_TYPE_VIEW; uint32_t nv = 0;
@@ -563,6 +582,7 @@ int main(int argc, char **argv) {
                 dbg_rx = r.raw_sx; dbg_ry = r.raw_sy; sx = r.a.sx; sy = r.a.sy; hit_item = r.a.item; M4 scene_to_phys = m4_mul(m4_yaw_pos(yaw0, origin), m4_mul(m4_trans(0, 0, jump), m4_model(zs, pitch_r))); m4_point(scene_to_phys, r.a.hit, hit_phys); have_hit = 1;
             }
         }
+        if (W.auto_on && W.bot_valid && !paused) { sx = W.bot_sx; sy = W.bot_sy; trig = W.bot_trig; if (W.bot_coin) coin = 1; if (W.bot_start) start = 1; }      /* the auto-player plays: it aims and fires, and puts in the credits */
         double t = now_s(), dt = t - last_t; if (dt > 0.1) dt = 0.1; last_t = t;
         if (tour) { af++; if (af % 60 == 30) shot_req = 1; if (af % 60 == 0) nav = 1; if (af > 60 * atoi(getenv("PBVR_TOUR")) + 40) { fprintf(stderr, "pbvr: tour finished\n"); running = 0; } }   /* PBVR_TOUR=n: visit n scenes, a screenshot each */
         if (getenv("PBVR_AUTOTEST")) {                                                    /* PBVR_AUTOTEST: a scripted editing session, with screenshots PBVR_SHOT.N.ppm */
@@ -680,7 +700,8 @@ int main(int argc, char **argv) {
         } else if (t < msg_until) {                                           /* a short note while playing: the scene just jumped to */
             panel_set(&panel, 0, scn ? scene_desc : ""); panel_set(&panel, 1, ""); panel_set(&panel, 2, ""); panel_set(&panel, 3, msg);
         }
-        { char nm[320]; if (scn) snprintf(nm, sizeof nm, "%s   table: %s", scene_desc, table_name ? table_name : "default"); else snprintf(nm, sizeof nm, "SCENE #%d (%.0f%% art match)   table: %s", cur_scene, cur_sim * 100, table_name ? table_name : "default"); panel_set(&namep, 0, o.no_labels ? "" : nm); }
+        { char nm[320]; if (scn) snprintf(nm, sizeof nm, "%s   table: %s", scene_desc, table_name ? table_name : "default"); else snprintf(nm, sizeof nm, "SCENE #%d (%.0f%% art match)   table: %s", cur_scene, cur_sim * 100, table_name ? table_name : "default"); if (W.auto_on) { SDL_LockMutex(W.mu); size_t L = strlen(nm); snprintf(nm + L, sizeof nm - L, "     %s", W.bot_status[0] ? W.bot_status : "auto: starting"); SDL_UnlockMutex(W.mu); }
+            panel_set(&namep, 0, o.no_labels ? "" : nm); }
         /* render */
         if (!o.no_vr) {
             XrCompositionLayerProjectionView pv[2]; XrCompositionLayerProjection layer = { XR_TYPE_COMPOSITION_LAYER_PROJECTION };
@@ -786,7 +807,7 @@ int main(int argc, char **argv) {
             fps_t = t; fps_n = 0;
         }
     }
-    fprintf(stderr, "pbvr: leaving the main loop\n"); W.quit = 1; SDL_WaitThread(thr, NULL);
+    fprintf(stderr, "pbvr: leaving the main loop\n"); if (o.bot_stats[0]) nb1_bot_save_stats(W.bot, o.bot_stats); W.quit = 1; SDL_WaitThread(thr, NULL);
     if (!o.no_vr && xr.sess) { xrDestroySession(xr.sess); xrDestroyInstance(xr.inst); }
     return 0;
 }

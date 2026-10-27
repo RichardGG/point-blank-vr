@@ -1,6 +1,6 @@
 CC ?= cc
 CFLAGS ?= -O2 -std=c11 -D_GNU_SOURCE -ffp-contract=off -Wall -Wextra
-SRC = nb1_video.c nb1_scene.c nb1_table.c nb1_edits.c nb1_png.c nb1_json.c nb1_surround.c nb1_sprites.c
+SRC = nb1_video.c nb1_scene.c nb1_table.c nb1_edits.c nb1_png.c nb1_json.c nb1_surround.c nb1_sprites.c nb1_bot.c
 UNAME := $(shell uname -s)
 
 # SDL2 for the desktop viewer: sdl2-config, or pkg-config, also looking where Homebrew puts them
@@ -27,9 +27,12 @@ pbdesk: $(SRC) desktop/pbdesk.c desktop/font7x13.h nb1.h nb1_internal.h nb1_json
 	$(CC) $(CFLAGS) $(SDL_CFLAGS) -o $@ $(SRC) desktop/pbdesk.c $(SDL_LIBS) $(GL_LIBS) -lm -lz
 
 # PC VR host (OpenXR loader is loaded at run time; needs the OpenXR headers: apt install libopenxr-dev). Windows: see vr/README.md
+pbbot: $(SRC) desktop/pbbot.c nb1.h nb1_internal.h nb1_json.h
+	$(CC) $(CFLAGS) -o $@ $(SRC) desktop/pbbot.c -lm -lz
+
 pbvr: $(SRC) vr/pbvr.c desktop/glscene.h nb1.h nb1_internal.h nb1_json.h
 	$(CC) $(CFLAGS) -Wno-missing-field-initializers -Wno-unused-function -Wno-unused-variable -Wno-misleading-indentation $(SDL_CFLAGS) -o $@ $(SRC) vr/pbvr.c $(SDL_LIBS) $(GL_LIBS) -lX11 -ldl -lm -lz
 
 clean:
-	rm -f nb1_tool pbdesk pbvr
+	rm -f nb1_tool pbdesk pbvr pbbot
 .PHONY: clean
