@@ -52,9 +52,13 @@ static BKey *keys_get(BKey **arr, int *n, int *cap, int code, int col, int creat
 static BKey *key_get(Nb1Bot *b, int code, int col, int create) { return keys_get(&b->keys, &b->nkeys, &b->capkeys, code, col, create); }
 static BKey *skey_get(Nb1Bot *b, int code, int col, int create) { return b->stage ? keys_get(&b->stage->keys, &b->stage->nkeys, &b->stage->cap, code, col, create) : NULL; }
 
+static void bot_env(Nb1Bot *b) {                                          /* tuning without a rules file: NB1_BOT_SPEED / GAP / HOLD / LEAD / FIRE_MIN */
+    const char *v; if ((v = getenv("NB1_BOT_SPEED"))) b->d.speed = atof(v); if ((v = getenv("NB1_BOT_GAP"))) b->d.gap = atof(v); if ((v = getenv("NB1_BOT_HOLD"))) b->d.hold = atof(v);
+    if ((v = getenv("NB1_BOT_LEAD"))) b->d.lead = atof(v); if ((v = getenv("NB1_BOT_FIRE_MIN"))) b->d.fire_min = atof(v);
+}
 Nb1Bot *nb1_bot_new(const char *rules_path) {
     Nb1Bot *b = calloc(1, sizeof *b); b->d = (BDef){ 8, 200, 0.35, 14, 12, 4, 6, 0.2 }; b->lives_claimed = 99;
-    if (!rules_path) return b;
+    if (!rules_path) { bot_env(b); return b; }
     FILE *f = fopen(rules_path, "rb"); if (!f) { fprintf(stderr, "bot: cannot read %s (using the defaults)\n", rules_path); return b; }
     fseek(f, 0, SEEK_END); long n = ftell(f); fseek(f, 0, SEEK_SET); char *txt = malloc((size_t)n + 1); if (fread(txt, 1, (size_t)n, f) != (size_t)n) n = 0; txt[n] = 0; fclose(f);
     Json *j = json_parse(txt); free(txt); if (!j) { fprintf(stderr, "bot: %s is not valid JSON\n", rules_path); return b; }
@@ -78,7 +82,7 @@ Nb1Bot *nb1_bot_new(const char *rules_path) {
         for (int i = 0; i < sc->n; i++) { BScene *s = &b->sc[b->nsc++]; snprintf(s->name, sizeof s->name, "%s", sc->key[i]); const Json *o = sc->kid[i], *v;
             s->only = (v = json_get(o, "only")) && v->num != 0; s->np = sel_parse(json_get(o, "prefer"), &s->prefer); s->na = sel_parse(json_get(o, "avoid"), &s->avoid); }
     }
-    json_free(j); return b;
+    json_free(j); bot_env(b); return b;
 }
 void nb1_bot_free(Nb1Bot *b) { if (!b) return; for (int i = 0; i < b->nstages; i++) { free(b->stages[i].keys); free(b->stages[i].order); if (b->stages[i].has_sc) { free(b->stages[i].sc.prefer); free(b->stages[i].sc.avoid); } } free(b->stages); for (int i = 0; i < b->nsc; i++) { free(b->sc[i].prefer); free(b->sc[i].avoid); } free(b->sc); free(b->keys); free(b); }
 void nb1_bot_set_scene(Nb1Bot *b, const char *name) {
@@ -204,13 +208,13 @@ void nb1_bot_step(Nb1Bot *b, const Nb1State *st, const Nb1GameInfo *g, unsigned 
             cs[i].cx = (ux0 + ux1) / 2; cs[i].cy = (uy0 + uy1) / 2; cs[i].w = ux1 - ux0; cs[i].h = uy1 - uy0; cs[j] = cs[--nc]; j = i; }
     }
     /* choose the target: keep the current one while it is still there and has not had its chances */
-    Cand *pick = NULL; double best = -1;
+    Cand *pick = NULL; double best = -1; int pick_supp = 0;
     for (int i = 0; i < nc; i++) {
-        Cand *c = &cs[i]; double dx = c->cx - b->ax, dy = c->cy - b->ay, dist = sqrt(dx * dx + dy * dy), s = c->wt / (1.0 + dist / 90.0);
-        if (b->have_target && c->code == b->cur_code && c->col == b->cur_col && abs(c->cx - b->cur_cx) < 40 && abs(c->cy - b->cur_cy) < 40) s *= (b->target_shots >= 3 ? 0.1 : 2.5);
-        if (!(b->stage && b->stage->multihit)) for (int q = 0; q < b->nrs; q++) if (frame - b->rs[q].f < 50 && abs(c->cx - b->rs[q].x) < 26 && abs(c->cy - b->rs[q].y) < 26) { s *= 0.04; break; }      /* just shot there: it is falling or gone */
+        Cand *c = &cs[i]; double dx = c->cx - b->ax, dy = c->cy - b->ay, dist = sqrt(dx * dx + dy * dy), s = c->wt / (1.0 + dist / 90.0); int supp = 0;
+        if (b->have_target && c->code == b->cur_code && c->col == b->cur_col && abs(c->cx - b->cur_cx) < 40 && abs(c->cy - b->cur_cy) < 40) s *= (b->target_shots >= 3 && !(b->stage && b->stage->multihit) ? 0.1 : 2.5);
+        if (!(b->stage && b->stage->multihit)) for (int q = 0; q < b->nrs; q++) if (frame - b->rs[q].f < 50 && abs(c->cx - b->rs[q].x) < 26 && abs(c->cy - b->rs[q].y) < 26) { s *= 0.04; supp = 1; break; }      /* just shot there: it is falling or gone */
         { unsigned h = (b->rng ^ (unsigned)(c->code * 40503 + c->col * 977)) * 2654435761u; h ^= h >> 15; h *= 2246822519u; s *= 0.75 + 0.5 * ((h >> 8) & 0xff) / 255.0; }     /* a fixed per-run factor for each sprite type, so runs differ (which stage card they pick) but a pick never flips back and forth */
-        if (s > best) { best = s; pick = c; }
+        if (s > best) { best = s; pick = c; pick_supp = supp; }
     }
     if (pick) {
         if (!b->have_target || pick->code != b->cur_code || pick->col != b->cur_col) { b->target_shots = 0; b->target_since = frame; }
@@ -224,7 +228,7 @@ void nb1_bot_step(Nb1Bot *b, const Nb1State *st, const Nb1GameInfo *g, unsigned 
         double ex = tx - b->ax, ey = ty - b->ay;
         if (b->trig_left > 0) { b->trig_left -= (int)dfr; }
         else if (b->gap_left > 0) { b->gap_left -= (int)dfr; }
-        else if (ex * ex + ey * ey < 5.0 * 5.0 && st && pick->wt >= b->d.fire_min) { b->trig_left = (int)b->d.hold; b->gap_left = (int)b->d.gap; b->shot_code = pick->code; b->shot_col = pick->col; b->shot_frame = frame; if (b->nq < 8) { b->q[b->nq].f = frame; b->q[b->nq].code = pick->code; b->q[b->nq].col = pick->col; b->q[b->nq].x = pick->cx; b->q[b->nq].y = pick->cy; b->q[b->nq].vx = vx; b->q[b->nq].vy = vy; b->q[b->nq].err = sqrt(ex * ex + ey * ey); b->q[b->nq].sscore = g && g->valid ? g->score : 0; b->q[b->nq].slives = g && g->valid ? g->lives : 9; b->q[b->nq].done = 0; b->nq++; } for (int q = 7; q > 0; q--) b->rs[q] = b->rs[q - 1]; b->rs[0].x = pick->cx; b->rs[0].y = pick->cy; b->rs[0].f = frame; if (b->nrs < 8) b->nrs++; b->shot_pending = 1; b->target_shots++; b->nshots++;
+        else if (ex * ex + ey * ey < 5.0 * 5.0 && st && pick->wt >= b->d.fire_min && !pick_supp) { b->trig_left = (int)b->d.hold; b->gap_left = (int)b->d.gap; b->shot_code = pick->code; b->shot_col = pick->col; b->shot_frame = frame; if (b->nq < 8) { b->q[b->nq].f = frame; b->q[b->nq].code = pick->code; b->q[b->nq].col = pick->col; b->q[b->nq].x = pick->cx; b->q[b->nq].y = pick->cy; b->q[b->nq].vx = vx; b->q[b->nq].vy = vy; b->q[b->nq].err = sqrt(ex * ex + ey * ey); b->q[b->nq].sscore = g && g->valid ? g->score : 0; b->q[b->nq].slives = g && g->valid ? g->lives : 9; b->q[b->nq].done = 0; b->nq++; } for (int q = 7; q > 0; q--) b->rs[q] = b->rs[q - 1]; b->rs[0].x = pick->cx; b->rs[0].y = pick->cy; b->rs[0].f = frame; if (b->nrs < 8) b->nrs++; b->shot_pending = 1; b->target_shots++; b->nshots++;
                                                          if (g && g->valid) { b->last_score = g->score; b->last_lives = g->lives; b->shot_score = g->score; b->shot_lives = g->lives; } }
         snprintf(b->status, sizeof b->status, "auto: target code %d col %d (w %.2f)  shots %u hits %u penalties %u", pick->code, pick->col, pick->wt, b->nshots, b->nhits, b->npen);
     } else {
