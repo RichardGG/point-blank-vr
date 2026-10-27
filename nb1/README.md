@@ -101,7 +101,8 @@ uses it; an explicit `--table` overrides. `tests/run_select.py` checks C against
 
 `nb1_sprites.c` gives access to every sprite of the sprite ROM at any time, whether or not the current scene has it loaded (for decorating scenes).
 The ROM (32,768 tiles of 16x16 pixels, 8 bpp, 255 = transparent; 22,956 are not empty) holds pixels only. Which tiles form a sprite, and the palette, are written into sprite RAM by the game at run time, so
-`research/tools/nb1/make_sprite_library.py` collects them from the captured scenes (`research/data/sprites`): **507 frames** (columns x rows of tiles plus palettes, 127 palettes) covering 7,202 tiles.
+`research/tools/nb1/make_sprite_library.py` collects them from the captured scenes and from long MAME runs (`research/data/sprites`): **1,566 frames** (columns x rows of tiles plus up to 6 palettes each, 700 palettes) covering 16,268 of the 22,956 non-empty tiles (71%).
+The long runs are `tools/mame/trace.lua` with `PB_HARVEST` (video-state dumps), `PB_KEEP=0x1c00b6=3` (keeps the lives full so the bot gets through every stage), `PB_MODE` (shoots the training / beginner / expert / very hard button) and `PB_STATE` (starts from each of the 121 save states), consumed by `harvest_sprites.py`; about 115,000 dumps in all.
 `nb1_sprlib_load`, `nb1_sprlib_frame_tex` (a frame with one of its palettes) and `nb1_sprlib_tiles_tex` (any run of ROM tiles, any grid; palette of the nearest seen tile, grey if none) return `Nb1Tex`, like `nb1_entry_tex`.
-`nb1_tool sprlib LIB ROMS OUT [tiles FIRST NCOLS NROWS]` writes them out. The C and Python renderings of all 507 frames are identical.
-Not extracted: the shapes and palettes of the other 15,754 non-empty tiles (the game's composition data is not stored verbatim in the program ROM; the library keeps a guess in `guess.json` that is about 75% right on known sprites).
+`nb1_tool sprlib LIB ROMS OUT [tiles FIRST NCOLS NROWS]` writes them out. The C and Python renderings of all frames are identical.
+Not extracted: the shapes and palettes of the other 6,688 non-empty tiles (the game's composition data is not stored verbatim in the program ROM; the library keeps a guess in `guess.json` that is about 75% right on known sprites).
