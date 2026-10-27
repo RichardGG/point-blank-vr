@@ -51,7 +51,7 @@ int main(int argc, char **argv) {
         if (flow && nb1_flow_phase(flow) == NB1_FLOW_CARD_SELECT) {      /* the choosing screen: the four cards fly in and zoom; they can be shot only once they stand still */
             static Nb1Entry pe[256]; int n = nb1_sprite_entries(st, pe), big = 0, o = 0; unsigned sig = 2166136261u; char tmp[600]; static char allsp[6000]; int oa = 0; allsp[0] = 0; tmp[0] = 0;
             for (int i = 0; i < n; i++) if (pe[i].ntiles) { int x0 = pe[i].tiles[0].x, y0 = pe[i].tiles[0].y, x1 = x0, y1 = y0; for (int k = 0; k < pe[i].ntiles; k++) { const Nb1Tile *tl = &pe[i].tiles[k]; if (tl->x < x0) x0 = tl->x; if (tl->y < y0) y0 = tl->y; if (tl->x + tl->w > x1) x1 = tl->x + tl->w; if (tl->y + tl->h > y1) y1 = tl->y + tl->h; }
-                { int t0 = pe[i].tiles[0].t, code = (((t0 & 0x7ff) | (st->bank[(t0 >> 11) & 7] << 11)) + pe[i].offset) & 0x7fff; oa += snprintf(allsp + oa, sizeof allsp - oa - 1, "%s[%d,%d,%d,%d,%d,%d]", oa ? "," : "", code, x0, y0, x1, y1, pe[i].ntiles); }
+                { int t0 = pe[i].tiles[0].t, code = (((t0 & 0x7ff) | (st->bank[(t0 >> 11) & 7] << 11)) + pe[i].offset) & 0x7fff; oa += snprintf(allsp + oa, sizeof allsp - oa - 1, "%s[%d,%d,%d,%d,%d,%d,%d]", oa ? "," : "", code, x0, y0, x1, y1, pe[i].ntiles, pe[i].palette); }
                 if (x1 - x0 >= 80 && x1 - x0 < 250 && y1 - y0 >= 60 && big < 8) { big++; sig = (sig ^ (unsigned)(x0 * 7 + y0 * 131 + x1 * 17 + y1 * 257)) * 16777619u; o += snprintf(tmp + o, sizeof tmp - o - 1, "%s[%d,%d,%d,%d]", o ? "," : "", x0, y0, x1, y1); } }
             if (big >= 3 && sig == card_sig) card_still++; else { card_still = 0; card_sig = sig; }
             int settled = card_still >= 12;
