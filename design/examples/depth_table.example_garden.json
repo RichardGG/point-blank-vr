@@ -1,0 +1,15 @@
+{
+  "defaults": {"z_front": 4.0, "z_back": 14.0, "hud_z": 2.0, "slot_gap": 0.0005},
+  "rules": [
+    {"match": {"kind": "tilemap", "layer": [4, 5]}, "hud": true},
+    {"match": {"kind": "sprite", "pri": [6]}, "hud": true},
+    {"match": {"kind": "tilemap", "layer": [0]}, "z": 40.0},
+    {"match": {"kind": "tilemap", "layer": [1]}, "z": 14.0},
+    {"match": {"kind": "sprite", "code": [12839, 12867]}, "z": 11.5},
+    {"match": {"kind": "sprite", "code": [12817, 12817]}, "z": 10.5},
+    {"match": {"kind": "sprite", "code": [12596, 12644]}, "z": 14.0},
+    {"match": {"kind": "sprite", "code": [13018, 13018]}, "z": 11.5},
+    {"match": {"kind": "sprite", "code": [12712, 12756]}, "z": 5.0},
+    {"match": {"kind": "sprite", "code": [12662, 12662]}, "z": 7.0}
+  ]
+}

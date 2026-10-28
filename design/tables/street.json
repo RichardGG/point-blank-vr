@@ -1,0 +1,171 @@
+{
+ "_note": "FIRST DRAFT. Street scenes 63-70. Parallax measured from the seven captured pan positions: tilemap layers 0 and 1 scroll at the same speed and layer 2 at 0.49 of it, so layers 0 and 1 share one depth and layer 2 is 2.04 times as far (10.0 m and 20.4 m here; the absolute scale is a guess from door and car sizes). Sprites (car, barrels, people) all stand on the street, so their depth comes from where their feet are: floor_contact -1.5 means a ground plane 1.5 m below the eye.",
+ "defaults": {
+  "far": 200.0,
+  "z_front": 4.0,
+  "z_back": 14.0,
+  "hud_z": 2.0,
+  "slot_gap": 0.0005
+ },
+ "rules": [
+  {
+   "match": {
+    "kind": "sprite",
+    "code": [
+     2289,
+     2289
+    ]
+   },
+   "z": 2.6
+  },
+  {
+   "match": {
+    "kind": "sprite",
+    "code": [
+     2401,
+     2401
+    ]
+   },
+   "z": 2.6
+  },
+  {
+   "match": {
+    "kind": "sprite",
+    "code": [
+     2415,
+     2415
+    ]
+   },
+   "z": 2.6
+  },
+  {
+   "match": {
+    "kind": "sprite",
+    "code": [
+     2528,
+     2528
+    ]
+   },
+   "z": 2.6
+  },
+  {
+   "match": {
+    "kind": "tilemap",
+    "layer": [
+     4,
+     5
+    ]
+   },
+   "hud": true
+  },
+  {
+   "match": {
+    "kind": "sprite",
+    "pri": [
+     6,
+     7
+    ]
+   },
+   "hud": true
+  },
+  {
+   "match": {
+    "kind": "tilemap",
+    "layer": [
+     2
+    ]
+   },
+   "z": 20.4
+  },
+  {
+   "match": {
+    "kind": "tilemap",
+    "layer": [
+     1
+    ]
+   },
+   "z": 10.0
+  },
+  {
+   "match": {
+    "kind": "tilemap",
+    "layer": [
+     0
+    ]
+   },
+   "z": 10.0
+  },
+  {
+   "match": {
+    "kind": "sprite",
+    "pri": [
+     2
+    ]
+   },
+   "z": 9.0
+  },
+  {
+   "match": {
+    "kind": "sprite",
+    "pri": [
+     4
+    ]
+   },
+   "floor_contact": -1.5
+  },
+  {
+   "match": {
+    "kind": "sprite",
+    "pri": [
+     5
+    ]
+   },
+   "z": 6.0
+  }
+ ],
+ "surround": {
+  "clear": [
+   165,
+   185,
+   205
+  ],
+  "extend": {
+   "layers": "all",
+   "deg": 150,
+   "fade": [
+    70,
+    150
+   ],
+   "y": 150,
+   "map_x": [
+    0,
+    1,
+    2
+   ]
+  },
+  "sky": {
+   "top": [
+    110,
+    160,
+    215
+   ],
+   "horizon": [
+    195,
+    210,
+    225
+   ]
+  },
+  "ground": {
+   "y": -1.5,
+   "color": [
+    92,
+    92,
+    88
+   ],
+   "fade": [
+    20,
+    110
+   ]
+  }
+ }
+}

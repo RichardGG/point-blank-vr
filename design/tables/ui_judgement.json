@@ -1,0 +1,112 @@
+{
+ "_note": "surround only: depth rules are the defaults (HUD, stage doors)",
+ "defaults": {
+  "far": 200.0,
+  "z_front": 4.0,
+  "z_back": 14.0,
+  "hud_z": 2.0,
+  "slot_gap": 0.0005
+ },
+ "rules": [
+  {
+   "match": {
+    "kind": "sprite",
+    "code": [
+     2289,
+     2289
+    ]
+   },
+   "z": 2.6
+  },
+  {
+   "match": {
+    "kind": "sprite",
+    "code": [
+     2401,
+     2401
+    ]
+   },
+   "z": 2.6
+  },
+  {
+   "match": {
+    "kind": "sprite",
+    "code": [
+     2415,
+     2415
+    ]
+   },
+   "z": 2.6
+  },
+  {
+   "match": {
+    "kind": "sprite",
+    "code": [
+     2528,
+     2528
+    ]
+   },
+   "z": 2.6
+  },
+  {
+   "match": {
+    "kind": "tilemap",
+    "layer": [
+     4,
+     5
+    ]
+   },
+   "hud": true
+  },
+  {
+   "match": {
+    "kind": "sprite",
+    "pri": [
+     6,
+     7
+    ]
+   },
+   "hud": true
+  }
+ ],
+ "surround": {
+  "clear": [
+   60,
+   48,
+   20
+  ],
+  "backdrop": {
+   "color": [
+    118,
+    94,
+    34
+   ],
+   "z": 3.3,
+   "y": 400
+  },
+  "ground": {
+   "y": -1.8,
+   "color": [
+    70,
+    56,
+    20
+   ],
+   "fade": [
+    8,
+    50
+   ]
+  },
+  "ceiling": {
+   "y": 3.0,
+   "color": [
+    90,
+    72,
+    28
+   ],
+   "fade": [
+    8,
+    50
+   ]
+  }
+ }
+}

@@ -1,0 +1,228 @@
+{
+ "_note": "Hand classification of the 121 captured scenes (images/scenes/NNN_*), from looking at every straight.png. A family shares background art, so one depth table can serve all of its scenes. 'kind' says what depth design the family needs. Scene numbers are the scene folder numbers.",
+ "families": [
+  {
+   "name": "windows",
+   "kind": "billboards in a facade (people behind window frames)",
+   "scenes": [
+    17,
+    25,
+    38,
+    51,
+    61,
+    72,
+    73,
+    77,
+    78,
+    79,
+    82,
+    83,
+    84,
+    86,
+    92,
+    94,
+    100,
+    101,
+    103,
+    104,
+    105,
+    115
+   ]
+  },
+  {
+   "name": "street_alley",
+   "kind": "layered street set: wall, car, barrels, people",
+   "scenes": [
+    64,
+    65,
+    66,
+    67,
+    68,
+    69,
+    70
+   ]
+  },
+  {
+   "name": "doors_buildings",
+   "kind": "close doors / building fronts",
+   "scenes": [
+    63,
+    75,
+    87
+   ]
+  },
+  {
+   "name": "ninja_garden",
+   "kind": "garden set (table exists: garden.json)",
+   "scenes": [
+    93,
+    110,
+    111
+   ]
+  },
+  {
+   "name": "jungle",
+   "kind": "foliage layers with a parallax-style stack",
+   "scenes": [
+    30,
+    85,
+    90,
+    114
+   ]
+  },
+  {
+   "name": "sky_and_hills",
+   "kind": "open-air backdrops, far sky + near ground",
+   "scenes": [
+    43,
+    45,
+    46,
+    49,
+    52,
+    76,
+    109,
+    34
+   ]
+  },
+  {
+   "name": "space",
+   "kind": "starfield + planet, far",
+   "scenes": [
+    107,
+    98
+   ]
+  },
+  {
+   "name": "night_castle",
+   "kind": "night sky + castle + foreground targets",
+   "scenes": [
+    26,
+    57,
+    59,
+    96,
+    108,
+    118
+   ]
+  },
+  {
+   "name": "curtain_stage",
+   "kind": "red theatre curtain backdrop, targets in front",
+   "scenes": [
+    12,
+    23,
+    48,
+    50,
+    55
+   ]
+  },
+  {
+   "name": "interiors",
+   "kind": "rooms and sets with a few props",
+   "scenes": [
+    28,
+    36,
+    37,
+    39,
+    41,
+    47,
+    53,
+    56,
+    95,
+    117,
+    54,
+    74
+   ]
+  },
+  {
+   "name": "steel_zigzag",
+   "kind": "flat steel plate with a red zig-zag path",
+   "scenes": [
+    40,
+    44,
+    80
+   ]
+  },
+  {
+   "name": "ui_judgement",
+   "kind": "gold result panels (flat UI)",
+   "scenes": [
+    3,
+    6,
+    7,
+    13,
+    14,
+    15,
+    32,
+    33,
+    60,
+    62,
+    71,
+    81,
+    119
+   ]
+  },
+  {
+   "name": "ui_rules_and_select",
+   "kind": "rules / select / initials / continue / ranking screens (flat UI)",
+   "scenes": [
+    0,
+    1,
+    2,
+    4,
+    5,
+    8,
+    9,
+    11,
+    19,
+    20,
+    89,
+    97,
+    102,
+    106,
+    112,
+    113,
+    120,
+    88,
+    18
+   ]
+  },
+  {
+   "name": "underwater",
+   "kind": "underwater scenes",
+   "scenes": [
+    10,
+    22,
+    91
+   ]
+  },
+  {
+   "name": "blank_white",
+   "kind": "white backdrop, targets only",
+   "scenes": [
+    24,
+    27,
+    29,
+    31,
+    35,
+    42,
+    99
+   ]
+  },
+  {
+   "name": "other",
+   "kind": "single-off screens (title text, target board)",
+   "scenes": [
+    21,
+    58,
+    116
+   ]
+  },
+  {
+   "name": "windows_variant",
+   "kind": "uses the window-building layer art but shows a steel plate with a zig-zag path (scene 16)",
+   "scenes": [
+    16
+   ]
+  }
+ ]
+}

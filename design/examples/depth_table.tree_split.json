@@ -1,0 +1,23 @@
+{
+  "defaults": {"z_front": 4.0, "z_back": 14.0, "hud_z": 2.0, "slot_gap": 0.0005},
+  "edits": [
+    {"match": {"kind": "tilemap", "layer": [0]},
+     "split": [
+       {"part": "foreground", "fill": {"clone": [[0,-16],[30,0]]},
+        "poly": [[[0,158],[40,164],[100,170],[104,224],[0,224]], [[198,192],[288,176],[288,224],[186,224]]]},
+       {"part": "trunk", "fill": "inpaint",
+        "poly": [[104,30],[190,30],[200,118],[216,172],[192,224],[96,224],[100,172],[114,118]]},
+       {"part": "canopy", "fill": "inpaint",
+        "poly": [[0,0],[288,0],[288,112],[236,124],[190,118],[104,118],[40,124],[0,112]]}
+     ]}
+  ],
+  "rules": [
+    {"match": {"kind": "tilemap", "layer": [4, 5]}, "hud": true},
+    {"match": {"kind": "sprite", "pri": [6]}, "hud": true},
+    {"match": {"kind": "tilemap", "layer": [0], "part": null}, "z": 40.0},
+    {"match": {"kind": "tilemap", "part": "foreground"}, "z": 4.0},
+    {"match": {"kind": "tilemap", "part": "trunk"}, "z": 8.0},
+    {"match": {"kind": "tilemap", "part": "canopy"}, "z": 6.5},
+    {"match": {"kind": "sprite", "pri": [2]}, "z": 6.0}
+  ]
+}

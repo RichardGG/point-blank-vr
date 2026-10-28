@@ -1,0 +1,304 @@
+[
+ {
+  "name": "hotel corridor",
+  "when": {
+   "codes_all": [
+    10440,
+    10407
+   ]
+  },
+  "table": "corridor.json"
+ },
+ {
+  "name": "hotel corridor (art)",
+  "when": {
+   "art_scenes": [
+    74
+   ],
+   "min_similarity": 0.85
+  },
+  "table": "corridor.json"
+ },
+ {
+  "name": "garden (lantern redraw)",
+  "when": {
+   "codes_all": [
+    12817
+   ]
+  },
+  "table": "garden.json"
+ },
+ {
+  "name": "honey tree",
+  "when": {
+   "codes_all": [
+    14797
+   ]
+  },
+  "table": "tree.json"
+ },
+ {
+  "name": "street",
+  "when": {
+   "art_scenes": [
+    63,
+    64,
+    65,
+    66,
+    67,
+    68,
+    69,
+    70
+   ],
+   "min_similarity": 0.85
+  },
+  "table": "street.json"
+ },
+ {
+  "name": "window buildings",
+  "when": {
+   "art_scenes": [
+    17,
+    25,
+    38,
+    51,
+    61,
+    72,
+    73,
+    77,
+    78,
+    79,
+    82,
+    83,
+    84,
+    86,
+    92,
+    94,
+    100,
+    101,
+    103,
+    104,
+    105,
+    115,
+    99
+   ],
+   "min_similarity": 0.85
+  },
+  "table": "windows.json"
+ },
+ {
+  "name": "flat UI screens",
+  "when": {
+   "art_scenes": [
+    21
+   ],
+   "min_similarity": 0.85
+  },
+  "table": "ui_flat.json"
+ },
+ {
+  "name": "surround jungle",
+  "when": {
+   "art_scenes": [
+    30,
+    85,
+    90,
+    114
+   ],
+   "min_similarity": 0.85
+  },
+  "table": "jungle.json"
+ },
+ {
+  "name": "surround sky_hills",
+  "when": {
+   "art_scenes": [
+    43,
+    45,
+    46,
+    49,
+    52,
+    76,
+    109,
+    34
+   ],
+   "min_similarity": 0.85
+  },
+  "table": "sky_hills.json"
+ },
+ {
+  "name": "surround space",
+  "when": {
+   "art_scenes": [
+    107,
+    98
+   ],
+   "min_similarity": 0.85
+  },
+  "table": "space.json"
+ },
+ {
+  "name": "surround night_castle",
+  "when": {
+   "art_scenes": [
+    26,
+    57,
+    59,
+    96,
+    108,
+    118
+   ],
+   "min_similarity": 0.85
+  },
+  "table": "night_castle.json"
+ },
+ {
+  "name": "surround curtain_stage",
+  "when": {
+   "art_scenes": [
+    12,
+    23,
+    48,
+    50,
+    55
+   ],
+   "min_similarity": 0.85
+  },
+  "table": "curtain_stage.json"
+ },
+ {
+  "name": "surround interiors",
+  "when": {
+   "art_scenes": [
+    28,
+    36,
+    37,
+    39,
+    41,
+    47,
+    53,
+    56,
+    95,
+    117,
+    54
+   ],
+   "min_similarity": 0.85
+  },
+  "table": "interiors.json"
+ },
+ {
+  "name": "surround steel",
+  "when": {
+   "art_scenes": [
+    40,
+    44,
+    80,
+    16
+   ],
+   "min_similarity": 0.85
+  },
+  "table": "steel.json"
+ },
+ {
+  "name": "surround underwater",
+  "when": {
+   "art_scenes": [
+    10,
+    22,
+    91
+   ],
+   "min_similarity": 0.85
+  },
+  "table": "underwater.json"
+ },
+ {
+  "name": "surround blank_white",
+  "when": {
+   "art_scenes": [
+    24,
+    27,
+    29,
+    31,
+    35,
+    42,
+    99
+   ],
+   "min_similarity": 0.85
+  },
+  "table": "blank_white.json"
+ },
+ {
+  "name": "surround ui_judgement",
+  "when": {
+   "art_scenes": [
+    3,
+    6,
+    7,
+    13,
+    14,
+    15,
+    32,
+    33,
+    60,
+    62,
+    71,
+    81,
+    119
+   ],
+   "min_similarity": 0.85
+  },
+  "table": "ui_judgement.json"
+ },
+ {
+  "name": "surround ui_rules",
+  "when": {
+   "art_scenes": [
+    0,
+    1,
+    2,
+    4,
+    5,
+    8,
+    9,
+    11,
+    19,
+    20,
+    89,
+    97,
+    102,
+    106,
+    112,
+    113,
+    120,
+    88,
+    18
+   ],
+   "min_similarity": 0.85
+  },
+  "table": "ui_rules.json"
+ },
+ {
+  "name": "surround doors",
+  "when": {
+   "art_scenes": [
+    63,
+    75,
+    87
+   ],
+   "min_similarity": 0.85
+  },
+  "table": "doors.json"
+ },
+ {
+  "name": "surround other",
+  "when": {
+   "art_scenes": [
+    21,
+    58,
+    116
+   ],
+   "min_similarity": 0.85
+  },
+  "table": "other.json"
+ }
+]

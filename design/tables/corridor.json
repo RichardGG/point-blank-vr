@@ -1,0 +1,322 @@
+{
+ "_note": "Hotel corridor (Very Hard 13 / Beginner 7 art). Geometry guessed from the vanishing lines: eye 1.5 m above the floor, ceiling 1.5 m above the eye, walls 1.7 m either side.",
+ "defaults": {
+  "far": 80.0,
+  "z_front": 4.0,
+  "z_back": 14.0,
+  "hud_z": 2.0,
+  "slot_gap": 0.0005
+ },
+ "edits": [
+  {
+   "match": {
+    "kind": "tilemap",
+    "layer": [
+     0,
+     1
+    ]
+   },
+   "split": [
+    {
+     "part": "floor",
+     "fill": "none",
+     "poly": [
+      [
+       10,
+       224
+      ],
+      [
+       143,
+       107
+      ],
+      [
+       277,
+       224
+      ]
+     ]
+    },
+    {
+     "part": "ceiling",
+     "fill": "none",
+     "poly": [
+      [
+       8,
+       0
+      ],
+      [
+       143,
+       107
+      ],
+      [
+       280,
+       0
+      ]
+     ]
+    },
+    {
+     "part": "wall_left",
+     "fill": "none",
+     "poly": [
+      [
+       0,
+       0
+      ],
+      [
+       8,
+       0
+      ],
+      [
+       143,
+       107
+      ],
+      [
+       10,
+       224
+      ],
+      [
+       0,
+       224
+      ]
+     ]
+    },
+    {
+     "part": "wall_right",
+     "fill": "none",
+     "poly": [
+      [
+       280,
+       0
+      ],
+      [
+       288,
+       0
+      ],
+      [
+       288,
+       224
+      ],
+      [
+       277,
+       224
+      ],
+      [
+       143,
+       107
+      ]
+     ]
+    }
+   ]
+  }
+ ],
+ "rules": [
+  {
+   "match": {
+    "kind": "sprite",
+    "code": [
+     2289,
+     2289
+    ]
+   },
+   "z": 2.6
+  },
+  {
+   "match": {
+    "kind": "sprite",
+    "code": [
+     2401,
+     2401
+    ]
+   },
+   "z": 2.6
+  },
+  {
+   "match": {
+    "kind": "sprite",
+    "code": [
+     2415,
+     2415
+    ]
+   },
+   "z": 2.6
+  },
+  {
+   "match": {
+    "kind": "sprite",
+    "code": [
+     2528,
+     2528
+    ]
+   },
+   "z": 2.6
+  },
+  {
+   "match": {
+    "kind": "tilemap",
+    "layer": [
+     4,
+     5
+    ]
+   },
+   "hud": true
+  },
+  {
+   "match": {
+    "kind": "sprite",
+    "pri": [
+     6
+    ]
+   },
+   "hud": true
+  },
+  {
+   "match": {
+    "kind": "tilemap",
+    "part": "floor"
+   },
+   "plane": {
+    "y": -1.5
+   }
+  },
+  {
+   "match": {
+    "kind": "tilemap",
+    "part": "ceiling"
+   },
+   "plane": {
+    "y": 1.5
+   }
+  },
+  {
+   "match": {
+    "kind": "tilemap",
+    "part": "wall_left"
+   },
+   "plane": {
+    "x": -1.7
+   }
+  },
+  {
+   "match": {
+    "kind": "tilemap",
+    "part": "wall_right"
+   },
+   "plane": {
+    "x": 1.7
+   }
+  },
+  {
+   "match": {
+    "kind": "tilemap",
+    "part": null
+   },
+   "z": 60.0
+  },
+  {
+   "match": {
+    "kind": "sprite",
+    "pri": [
+     0,
+     3,
+     5
+    ],
+    "center_x": [
+     0,
+     144
+    ]
+   },
+   "plane": {
+    "x": -1.7
+   }
+  },
+  {
+   "match": {
+    "kind": "sprite",
+    "pri": [
+     0,
+     3,
+     5
+    ],
+    "center_x": [
+     144,
+     289
+    ]
+   },
+   "plane": {
+    "x": 1.7
+   }
+  },
+  {
+   "match": {
+    "kind": "sprite",
+    "code": [
+     10471,
+     10471
+    ]
+   },
+   "ceiling_contact": 1.5
+  },
+  {
+   "match": {
+    "kind": "sprite",
+    "code": [
+     10480,
+     10600
+    ]
+   },
+   "floor_contact": -1.5
+  }
+ ],
+ "view": {
+  "target_z": 9,
+  "dist": 15,
+  "pitch": 35,
+  "focal": 560,
+  "yaw": 30
+ },
+ "surround": {
+  "clear": [
+   30,
+   20,
+   20
+  ],
+  "ground": {
+   "y": -1.5,
+   "texture": "sample",
+   "rows": [
+    160,
+    222
+   ],
+   "fade": [
+    30,
+    90
+   ]
+  },
+  "ceiling": {
+   "y": 1.5,
+   "texture": "sample",
+   "rows": [
+    8,
+    70
+   ],
+   "fade": [
+    30,
+    90
+   ]
+  },
+  "walls": {
+   "x": 1.7,
+   "y": [
+    -1.5,
+    1.5
+   ],
+   "z": [
+    4.2,
+    24
+   ],
+   "fade": [
+    30,
+    90
+   ]
+  }
+ }
+}

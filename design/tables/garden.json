@@ -1,0 +1,248 @@
+{
+ "defaults": {
+  "z_front": 4.0,
+  "z_back": 14.0,
+  "hud_z": 2.0,
+  "slot_gap": 0.0005,
+  "far": 200.0
+ },
+ "edits": [
+  {
+   "match": {
+    "kind": "sprite",
+    "code": [
+     12817,
+     12817
+    ]
+   },
+   "punch": {
+    "from": {
+     "kind": "tilemap",
+     "layer": [
+      1
+     ]
+    },
+    "grow": 2,
+    "fill": {
+     "clone": [
+      [
+       70,
+       0
+      ],
+      [
+       -70,
+       0
+      ],
+      [
+       0,
+       -30
+      ]
+     ]
+    }
+   }
+  }
+ ],
+ "rules": [
+  {
+   "match": {
+    "kind": "sprite",
+    "code": [
+     2289,
+     2289
+    ]
+   },
+   "z": 2.6
+  },
+  {
+   "match": {
+    "kind": "sprite",
+    "code": [
+     2401,
+     2401
+    ]
+   },
+   "z": 2.6
+  },
+  {
+   "match": {
+    "kind": "sprite",
+    "code": [
+     2415,
+     2415
+    ]
+   },
+   "z": 2.6
+  },
+  {
+   "match": {
+    "kind": "sprite",
+    "code": [
+     2528,
+     2528
+    ]
+   },
+   "z": 2.6
+  },
+  {
+   "match": {
+    "kind": "tilemap",
+    "layer": [
+     4,
+     5
+    ]
+   },
+   "hud": true
+  },
+  {
+   "match": {
+    "kind": "sprite",
+    "pri": [
+     6
+    ]
+   },
+   "hud": true
+  },
+  {
+   "match": {
+    "kind": "tilemap",
+    "layer": [
+     0
+    ]
+   },
+   "z": 18.0
+  },
+  {
+   "match": {
+    "kind": "tilemap",
+    "layer": [
+     1
+    ]
+   },
+   "z": 17.0
+  },
+  {
+   "match": {
+    "kind": "sprite",
+    "code": [
+     12839,
+     12867
+    ]
+   },
+   "z": 14.5
+  },
+  {
+   "match": {
+    "kind": "sprite",
+    "code": [
+     12817,
+     12817
+    ]
+   },
+   "z": 16.0
+  },
+  {
+   "match": {
+    "kind": "sprite",
+    "code": [
+     12596,
+     12644
+    ]
+   },
+   "z": 16.5
+  },
+  {
+   "match": {
+    "kind": "sprite",
+    "code": [
+     13018,
+     13018
+    ]
+   },
+   "z": 14.5
+  },
+  {
+   "match": {
+    "kind": "sprite",
+    "code": [
+     12712,
+     12756
+    ]
+   },
+   "z": 5.0
+  },
+  {
+   "match": {
+    "kind": "sprite",
+    "code": [
+     12662,
+     12662
+    ]
+   },
+   "z": 19.0
+  },
+  {
+   "match": {
+    "kind": "sprite",
+    "pri": [
+     1
+    ]
+   },
+   "z": 17.5
+  },
+  {
+   "match": {
+    "kind": "sprite",
+    "pri": [
+     2
+    ]
+   },
+   "z": 16.5
+  }
+ ],
+ "view": {
+  "target_z": 9,
+  "dist": 15,
+  "pitch": 14,
+  "focal": 620,
+  "yaw": 45
+ },
+ "surround": {
+  "clear": [
+   185,
+   210,
+   235
+  ],
+  "extend": {
+   "layers": "all",
+   "deg": 150,
+   "fade": [
+    70,
+    150
+   ],
+   "map_x": [
+    0,
+    1
+   ]
+  },
+  "sky": {
+   "top": "sample",
+   "horizon": [
+    190,
+    215,
+    240
+   ]
+  },
+  "ground": {
+   "y": -1.4,
+   "texture": "sample",
+   "rows": [
+    190,
+    222
+   ],
+   "fade": [
+    15,
+    120
+   ]
+  }
+ }
+}
