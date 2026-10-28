@@ -35,6 +35,11 @@ static double ct_score(const char *key, const char *want) {
     return known > 0 ? (comp + 1) / (comp + fail + 2) : 0.7; }
 static void entry_box(const Nb1Entry *e, int *x0, int *y0, int *x1, int *y1) { *x0 = e->tiles[0].x; *y0 = e->tiles[0].y; *x1 = *x0; *y1 = *y0; for (int k = 0; k < e->ntiles; k++) { const Nb1Tile *tl = &e->tiles[k]; if (tl->x < *x0) *x0 = tl->x; if (tl->y < *y0) *y0 = tl->y; if (tl->x + tl->w > *x1) *x1 = tl->x + tl->w; if (tl->y + tl->h > *y1) *y1 = tl->y + tl->h; } }
 static unsigned char pbs_bytes[NB1_STATE_FILE_BYTES];      /* the raw bytes of the state being handled, for --capture */
+static void scene_save(const char *dir, int *seq, unsigned fr, int phase, const char *text, unsigned fp, const Nb1GameInfo *gi, const char *tag, const char *extra) {
+    char p[1400]; snprintf(p, sizeof p, "%s/scene_%04d.state", dir, *seq); FILE *f = fopen(p, "wb"); if (f) { fwrite(pbs_bytes, 1, NB1_STATE_FILE_BYTES, f); fclose(f); }
+    snprintf(p, sizeof p, "%s/scene_log.tsv", dir); FILE *l = fopen(p, "a"); if (l) { fprintf(l, "%d\t%u\t%d\t%s\t%08x\t%d\t%d\t%d\t%s\t%s\n", *seq, fr, phase, text, fp, gi->stage, gi->mode, gi->diff, tag, extra); fclose(l); }
+    (*seq)++;
+}
 static int cmp_int(const void *a, const void *b) { return *(const int *)a - *(const int *)b; }
 /* read the four cards of a settled choosing screen: a key for the picture of each, and whether it carries the flag of a played stage */
 static void read_cards(const Nb1State *st, const Nb1Entry *pe, int n, char key[4][16], int flagged[4]) {
@@ -60,7 +65,7 @@ int main(int argc, char **argv) {
     Nb1Bot *bot = nb1_bot_new(rules); nb1_bot_set_mode(bot, want_mode); nb1_bot_set_seed(bot, seed); Nb1Roms roms; int have_roms = roms_dir && nb1_roms_load(&roms, roms_dir) == 0;
     Nb1TableSet *ts = tables ? nb1_tableset_load(tables) : NULL; Nb1Selector *sel = NULL; if (ts) { if (have_roms) nb1_tableset_set_roms(ts, &roms); sel = nb1_selector_new(ts, 3); }
     char latest[1100], aim[1100], aim_tmp[1110], game[1100]; snprintf(latest, sizeof latest, "%s/latest.txt", ipc); snprintf(aim, sizeof aim, "%s/aim.txt", ipc); snprintf(aim_tmp, sizeof aim_tmp, "%s.tmp", aim); snprintf(game, sizeof game, "%s/game.txt", ipc);
-    Nb1Flow *flow = flow_dir ? nb1_flow_load(flow_dir) : NULL; if (flow_dir && !flow) fprintf(stderr, "pbbot: cannot load the flow data in %s\n", flow_dir); int pick_quad = -1, prev_trig = 0, cur_quad = -1; unsigned scene_fp = 0, scene_cand = 0, scene_last_fr = 0; int scene_still = 0, scene_seq = 0; int card_goal = -1; unsigned card_steps = 0; char next_key[16] = "", goal_key[16] = "", pend_key[16] = "", cur_ckey[16] = ""; int pick_id = -1, pick_seq = 0, cur_pid = -1, card_wait = 0, card_set = 0, card_still = 0; unsigned card_sig = 0; char pick_all[6000] = "", cur_all[6000] = ""; double pick_ax = 0, pick_ay = 0, cur_ax = 0, cur_ay = 0; char pick_sp[4000] = "", cur_sp[4000] = ""; int res_failed = 0, res_complete = 0, lives_start = -1; char save_req[120] = "-"; char saved_for[220] = ""; unsigned intro_seen = 0; int unk_n = 0; const char *cur_name = NULL; char ident[220] = "", cur_ident[220] = "";
+    Nb1Flow *flow = flow_dir ? nb1_flow_load(flow_dir) : NULL; if (flow_dir && !flow) fprintf(stderr, "pbbot: cannot load the flow data in %s\n", flow_dir); int pick_quad = -1, prev_trig = 0, cur_quad = -1; int scene_phase = -1, scene_tagged = 0; unsigned scene_phase_fr = 0; unsigned scene_fp = 0, scene_cand = 0, scene_last_fr = 0; int scene_still = 0, scene_seq = 0; int card_goal = -1; unsigned card_steps = 0; char next_key[16] = "", goal_key[16] = "", pend_key[16] = "", cur_ckey[16] = ""; int pick_id = -1, pick_seq = 0, cur_pid = -1, card_wait = 0, card_set = 0, card_still = 0; unsigned card_sig = 0; char pick_all[6000] = "", cur_all[6000] = ""; double pick_ax = 0, pick_ay = 0, cur_ax = 0, cur_ay = 0; char pick_sp[4000] = "", cur_sp[4000] = ""; int res_failed = 0, res_complete = 0, lives_start = -1; char save_req[120] = "-"; char saved_for[220] = ""; unsigned intro_seen = 0; int unk_n = 0; const char *cur_name = NULL; char ident[220] = "", cur_ident[220] = "";
     typedef struct { int code, col; double n, hits, pen; } K; K *snap = NULL; int nsnap = 0; int cur_stage = -99, cur_diff = -99, cur_card = -99; unsigned stage_start = 0, cap_start = 0; int cap_n = 0, stage_scenes = 0; char scenes_seen[400] = "";
     unsigned last = 0; int have = 0, seq = 0; time_t t0 = time(NULL); unsigned long steps = 0; double sx = 144, sy = 112; int trig = 0, coin = 0, start = 0;
     while (seconds >= 0 && (seconds == 0 || difftime(time(NULL), t0) < seconds)) {
@@ -78,13 +83,18 @@ int main(int argc, char **argv) {
             uint8_t us[140 * 16 * 3]; if (unk_dir && nb1_flow_unknown(flow, us)) { char up[1200]; snprintf(up, sizeof up, "%s/unknown_%03d.ppm", unk_dir, unk_n++); FILE *uf = fopen(up, "wb"); if (uf) { fprintf(uf, "P6\n140 16\n255\n"); fwrite(us, 1, sizeof us, uf); fclose(uf); }
                 snprintf(up, sizeof up, "%s/unknown_%03d_full.ppm", unk_dir, unk_n - 1); uint8_t *fr_rgb = malloc(NB1_W * NB1_H * 3); nb1_render_composite(st, st, &roms, fr_rgb); uf = fopen(up, "wb"); if (uf) { fprintf(uf, "P6\n%d %d\n255\n", NB1_W, NB1_H); fwrite(fr_rgb, 1, NB1_W * NB1_H * 3, uf); fclose(uf); } free(fr_rgb); }
             if (flow_log && steps % 3 == 0) { FILE *ff = fopen(flow_log, "a"); if (ff) { fprintf(ff, "%u\t%d\t%d\t%s\t%s\t%s\t%d\n", fr, nb1_flow_phase(flow), nb1_flow_type(flow), cur_name ? cur_name : "", nb1_flow_locked_table(flow) ? nb1_flow_locked_table(flow) : "", nb1_flow_type(flow) >= 0 ? nb1_flow_text(flow) : "", gi.stage); fclose(ff); } } }
-        if (scene_dir) {        /* scene capture: save the raw state whenever the background set-up (sprite banks + tilemap control) changes and holds, and every 10 s */
+        if (scene_dir) {        /* scene capture: a raw state whenever the background set-up (sprite banks + tilemap control + flow phase) changes and holds, every 10 s, and at fixed moments of each screen (tagged) */
             unsigned fp = 2166136261u; for (int k = 0; k < 8; k++) fp = (fp ^ st->bank[k]) * 16777619u; for (int k = 0x10; k < 0x14; k++) fp = (fp ^ st->ctl[k]) * 16777619u; fp = (fp ^ (unsigned)(flow ? nb1_flow_phase(flow) : 9)) * 16777619u;
+            int ph = flow ? nb1_flow_phase(flow) : -1; if (ph != scene_phase) { scene_phase = ph; scene_phase_fr = fr; scene_tagged = 0; }
+            const char *ttxt = flow && nb1_flow_type(flow) >= 0 ? nb1_flow_text(flow) : "";
+            const char *tag = NULL; unsigned since = fr - scene_phase_fr;
+            if (ph == NB1_FLOW_INTRO && since >= 90 && !(scene_tagged & 1)) { scene_tagged |= 1; tag = "rules"; }              /* the rules screen with its text drawn */
+            else if (ph == NB1_FLOW_JUDGEMENT && since >= 60 && !(scene_tagged & 2)) { scene_tagged |= 2; tag = "result"; }      /* the result panel */
+            else if (ph == NB1_FLOW_ATTRACT && since >= 120 && !(scene_tagged & 4)) { scene_tagged |= 4; tag = "attract"; }
+            else if (ph == NB1_FLOW_PLAY && since >= 240 && !(scene_tagged & 8)) { scene_tagged |= 8; tag = "play"; }
             if (fp == scene_cand) scene_still++; else { scene_cand = fp; scene_still = 0; }
-            if (scene_still >= 10 && (fp != scene_fp || fr - scene_last_fr >= 600)) {
-                char sp3[1400]; snprintf(sp3, sizeof sp3, "%s/scene_%04d.state", scene_dir, scene_seq); FILE *sf = fopen(sp3, "wb"); if (sf) { fwrite(pbs_bytes, 1, NB1_STATE_FILE_BYTES, sf); fclose(sf); }
-                snprintf(sp3, sizeof sp3, "%s/scene_log.tsv", scene_dir); FILE *lf2 = fopen(sp3, "a"); if (lf2) { fprintf(lf2, "%d\t%u\t%d\t%s\t%08x\t%d\n", scene_seq, fr, flow ? nb1_flow_phase(flow) : -1, flow && nb1_flow_type(flow) >= 0 ? nb1_flow_text(flow) : "", fp, gi.stage); fclose(lf2); }
-                scene_seq++; scene_fp = fp; scene_last_fr = fr; scene_still = 0; }
+            if (!tag && scene_still >= 10 && (fp != scene_fp || fr - scene_last_fr >= 600)) { tag = "bg"; scene_fp = fp; scene_last_fr = fr; scene_still = 0; }
+            if (tag) scene_save(scene_dir, &scene_seq, fr, ph, ttxt, fp, &gi, tag, "");
         }
         card_wait = 0;
         if (flow && nb1_flow_phase(flow) == NB1_FLOW_CARD_SELECT) {      /* the choosing screen: the four cards fly in and zoom; they can be shot only once they stand still */
@@ -100,6 +110,7 @@ int main(int argc, char **argv) {
             if (settled && card_goal < 0 && card_set) {         /* choose the card to shoot: the best one that has not been played */
                 char ck[4][16]; int fl[4], nfl = 0; read_cards(st, pe, n, ck, fl); for (int q = 0; q < 4; q++) nfl += fl[q];
                 double best = -1; for (int q = 0; q < 4; q++) { if (!strcmp(ck[q], "-")) continue; double sc = ct_score(ck[q], want_text) - (nfl < 4 && fl[q] ? 100 : 0); if (sc > best) { best = sc; card_goal = q; } }
+                if (card_goal >= 0 && scene_dir) { char ex[200]; snprintf(ex, sizeof ex, "%s,%s,%s,%s;%d;%d%d%d%d", ck[0], ck[1], ck[2], ck[3], card_goal, fl[0], fl[1], fl[2], fl[3]); scene_save(scene_dir, &scene_seq, fr, NB1_FLOW_CARD_SELECT, "", 0, &gi, "choose", ex); }
                 if (card_goal >= 0) { snprintf(goal_key, sizeof goal_key, "%s", ck[card_goal]); next_key[0] = 0; if (nfl == 2 && !fl[card_goal]) for (int q = 0; q < 4; q++) if (q != card_goal && !fl[q]) snprintf(next_key, sizeof next_key, "%s", ck[q]);      /* two cards left: the other one is what the game picks by itself on the last screen */
                      card_steps = 0; if (getenv("NB1_CARD_DEBUG")) fprintf(stderr, "cards %s%s %s%s %s%s %s%s -> %d\n", ck[0], fl[0] ? "*" : "", ck[1], fl[1] ? "*" : "", ck[2], fl[2] ? "*" : "", ck[3], fl[3] ? "*" : "", card_goal); } }
             if (!settled) card_wait = 1;
