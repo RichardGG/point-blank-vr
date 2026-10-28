@@ -34,6 +34,7 @@ static double ct_score(const char *key, const char *want) {
     if (want) return wanted > 0 ? 2.0 + wanted / known : known > 0 ? 0.1 : 0.7;       /* a wanted stage first, then cards not yet known, never a card known to be something else */
     return known > 0 ? (comp + 1) / (comp + fail + 2) : 0.7; }
 static void entry_box(const Nb1Entry *e, int *x0, int *y0, int *x1, int *y1) { *x0 = e->tiles[0].x; *y0 = e->tiles[0].y; *x1 = *x0; *y1 = *y0; for (int k = 0; k < e->ntiles; k++) { const Nb1Tile *tl = &e->tiles[k]; if (tl->x < *x0) *x0 = tl->x; if (tl->y < *y0) *y0 = tl->y; if (tl->x + tl->w > *x1) *x1 = tl->x + tl->w; if (tl->y + tl->h > *y1) *y1 = tl->y + tl->h; } }
+static unsigned char pbs_bytes[NB1_STATE_FILE_BYTES];      /* the raw bytes of the state being handled, for --capture */
 static int cmp_int(const void *a, const void *b) { return *(const int *)a - *(const int *)b; }
 /* read the four cards of a settled choosing screen: a key for the picture of each, and whether it carries the flag of a played stage */
 static void read_cards(const Nb1State *st, const Nb1Entry *pe, int n, char key[4][16], int flagged[4]) {
@@ -41,8 +42,8 @@ static void read_cards(const Nb1State *st, const Nb1Entry *pe, int n, char key[4
         int codes[16], nc = 0; flagged[q] = 0;
         for (int i = 0; i < n; i++) if (pe[i].ntiles) { int x0, y0, x1, y1; entry_box(&pe[i], &x0, &y0, &x1, &y1); int nt = pe[i].ntiles;
             int t0 = pe[i].tiles[0].t, code = (((t0 & 0x7ff) | (st->bank[(t0 >> 11) & 7] << 11)) + pe[i].offset) & 0x7fff;
-            if (nt == 43 || nt == 59 || nt == 63) { if (x1 - x0 >= 140 && x1 - x0 <= 148 && y1 - y0 >= 108 && y1 - y0 <= 116 && abs((x0 + x1) / 2 - (CBOX[q][0] + CBOX[q][2]) / 2) <= 20 && abs((y0 + y1) / 2 - (CBOX[q][1] + CBOX[q][3]) / 2) <= 30 && pe[i].palette != 75 && pe[i].palette != 65) flagged[q] = 1; continue; }
-            if (nt == 20 || nt == 10) continue;
+            if (nt == 10) { if (x1 - x0 >= 44 && x1 - x0 <= 52 && y1 - y0 >= 60 && y1 - y0 <= 68 && abs((x0 + x1) / 2 - (CBOX[q][0] + CBOX[q][2]) / 2) <= 15 && abs((y0 + y1) / 2 - (CBOX[q][1] + CBOX[q][3]) / 2) <= 15) flagged[q] = 1; continue; }      /* the flag of a played card: a 10-tile 48x64 sprite on the middle of the card (3960 the white flag with the X, 3915 the red flag) */
+            if (nt == 20 || nt == 43 || nt == 59 || nt == 63) continue;
             if (abs(x0 - CBOX[q][0]) <= 3 && abs(y0 - CBOX[q][1]) <= 3 && abs(x1 - CBOX[q][2]) <= 3 && abs(y1 - CBOX[q][3]) <= 3 && nc < 16) { int dup = 0; for (int k = 0; k < nc; k++) dup |= codes[k] == code; if (!dup) codes[nc++] = code; } }
         qsort(codes, (size_t)nc, sizeof(int), cmp_int); unsigned h = 2166136261u; for (int k = 0; k < nc; k++) h = (h ^ (unsigned)codes[k]) * 16777619u; snprintf(key[q], 16, nc ? "%08x" : "-", h); }
 }
@@ -69,7 +70,7 @@ int main(int argc, char **argv) {
         if (!ok || (have && fr == last)) { SLEEP_MS(3); continue; }
         char path[1100]; snprintf(path, sizeof path, "%s/%s", ipc, name); b = slurp(path, &n);
         if (!b || n != NB1_STATE_FILE_BYTES + 12 || memcmp(b, "PBS1", 4) || memcmp(b + 4, b + n - 4, 4)) { free(b); SLEEP_MS(2); continue; }
-        Nb1State *st = nb1_state_from_bytes(b + 8, n - 12); free(b); last = fr; have = 1; if (!st) continue;
+        memcpy(pbs_bytes, b + 8, NB1_STATE_FILE_BYTES); Nb1State *st = nb1_state_from_bytes(b + 8, n - 12); free(b); last = fr; have = 1; if (!st) continue;
         Nb1GameInfo gi; memset(&gi, 0, sizeof gi); { unsigned gf; int l, s, m, sg, d; unsigned char *gb = slurp(game, &n); if (gb) { gb = realloc(gb, n + 1); gb[n] = 0;
             int cd = 0; if (sscanf((char *)gb, "%u %d %d %d %d %d %d", &gf, &l, &s, &m, &sg, &d, &cd) >= 6) { gi.valid = 1; gi.lives = l; gi.score = s; gi.mode = m; gi.stage = sg; gi.diff = d; gi.card = cd; } free(gb); } }
         if (sel) { const char *nm = NULL; if (nb1_selector_update(sel, st, st, &nm) && nm) { cur_name = nm; nb1_bot_set_scene(bot, nm); if (!strstr(scenes_seen, nm) && strlen(scenes_seen) + strlen(nm) + 3 < sizeof scenes_seen) { strcat(scenes_seen, stage_scenes++ ? "; " : ""); strcat(scenes_seen, nm); } } }
@@ -87,7 +88,7 @@ int main(int argc, char **argv) {
             int settled = card_still >= 45;      /* the cards stand still, and the flags of the played ones have had time to drop in and wave */ if (getenv("NB1_CARD_DEBUG")) fprintf(stderr, "card fr %u big %d still %d sig %08x\n", fr, big, card_still, sig);
             if (settled) { snprintf(pick_sp, sizeof pick_sp, "%s", tmp); snprintf(pick_all, sizeof pick_all, "%s", allsp); }      /* the flags of the played cards drop in after the cards settle: keep the newest picture of the screen */
             if (settled && !card_set) { card_set = 1; pick_id = pick_seq++; pick_quad = -1;          /* the cards stand still: this is what was on offer */
-                if (capdir && have_roms) { uint8_t *rgb = malloc(NB1_W * NB1_H * 3); nb1_render_composite(st, st, &roms, rgb); char pp[1400]; snprintf(pp, sizeof pp, "%s/offer_%03d.ppm", capdir, pick_id); FILE *pf = fopen(pp, "wb"); if (pf) { fprintf(pf, "P6\n%d %d\n255\n", NB1_W, NB1_H); fwrite(rgb, 1, NB1_W * NB1_H * 3, pf); fclose(pf); } free(rgb); } }
+                if (capdir && have_roms) { uint8_t *rgb = malloc(NB1_W * NB1_H * 3); nb1_render_composite(st, st, &roms, rgb); char pp[1400]; snprintf(pp, sizeof pp, "%s/offer_%03d.ppm", capdir, pick_id); { char sp2[1400]; snprintf(sp2, sizeof sp2, "%s/offer_%03d.state", capdir, pick_id); FILE *sf = fopen(sp2, "wb"); if (sf) { fwrite(pbs_bytes, 1, NB1_STATE_FILE_BYTES, sf); fclose(sf); } } FILE *pf = fopen(pp, "wb"); if (pf) { fprintf(pf, "P6\n%d %d\n255\n", NB1_W, NB1_H); fwrite(rgb, 1, NB1_W * NB1_H * 3, pf); fclose(pf); } free(rgb); } }
             if (settled && card_goal < 0 && card_set) {         /* choose the card to shoot: the best one that has not been played */
                 char ck[4][16]; int fl[4], nfl = 0; read_cards(st, pe, n, ck, fl); for (int q = 0; q < 4; q++) nfl += fl[q];
                 double best = -1; for (int q = 0; q < 4; q++) { if (!strcmp(ck[q], "-")) continue; double sc = ct_score(ck[q], want_text) - (nfl < 4 && fl[q] ? 100 : 0); if (sc > best) { best = sc; card_goal = q; } }
