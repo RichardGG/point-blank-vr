@@ -52,14 +52,14 @@ int main(int argc, char **argv) {
             static Nb1Entry pe[256]; int n = nb1_sprite_entries(st, pe), big = 0, o = 0; unsigned sig = 2166136261u; char tmp[600]; static char allsp[6000]; int oa = 0; allsp[0] = 0; tmp[0] = 0;
             for (int i = 0; i < n; i++) if (pe[i].ntiles) { int x0 = pe[i].tiles[0].x, y0 = pe[i].tiles[0].y, x1 = x0, y1 = y0; for (int k = 0; k < pe[i].ntiles; k++) { const Nb1Tile *tl = &pe[i].tiles[k]; if (tl->x < x0) x0 = tl->x; if (tl->y < y0) y0 = tl->y; if (tl->x + tl->w > x1) x1 = tl->x + tl->w; if (tl->y + tl->h > y1) y1 = tl->y + tl->h; }
                 { int t0 = pe[i].tiles[0].t, code = (((t0 & 0x7ff) | (st->bank[(t0 >> 11) & 7] << 11)) + pe[i].offset) & 0x7fff; oa += snprintf(allsp + oa, sizeof allsp - oa - 1, "%s[%d,%d,%d,%d,%d,%d,%d]", oa ? "," : "", code, x0, y0, x1, y1, pe[i].ntiles, pe[i].palette); }
-                if (pe[i].ntiles == 59 || pe[i].ntiles == 63) sig = (sig ^ (unsigned)(pe[i].ntiles * 31 + x0 * 7 + y0 * 131)) * 16777619u;      /* the flags of played cards drop in: wait for them too */
                 if (x1 - x0 >= 80 && x1 - x0 < 250 && y1 - y0 >= 60 && big < 8) { big++; sig = (sig ^ (unsigned)(x0 * 7 + y0 * 131 + x1 * 17 + y1 * 257)) * 16777619u; o += snprintf(tmp + o, sizeof tmp - o - 1, "%s[%d,%d,%d,%d]", o ? "," : "", x0, y0, x1, y1); } }
             if (big >= 3 && sig == card_sig) card_still++; else { card_still = 0; card_sig = sig; }
-            int settled = card_still >= 20;
+            int settled = card_still >= 45;      /* the cards stand still, and the flags of the played ones have had time to drop in and wave */ if (getenv("NB1_CARD_DEBUG")) fprintf(stderr, "card fr %u big %d still %d sig %08x\n", fr, big, card_still, sig);
             if (settled) { snprintf(pick_sp, sizeof pick_sp, "%s", tmp); snprintf(pick_all, sizeof pick_all, "%s", allsp); }      /* the flags of the played cards drop in after the cards settle: keep the newest picture of the screen */
             if (settled && !card_set) { card_set = 1; pick_id = pick_seq++; pick_quad = -1;          /* the cards stand still: this is what was on offer */
                 if (capdir && have_roms) { uint8_t *rgb = malloc(NB1_W * NB1_H * 3); nb1_render_composite(st, st, &roms, rgb); char pp[1400]; snprintf(pp, sizeof pp, "%s/offer_%03d.ppm", capdir, pick_id); FILE *pf = fopen(pp, "wb"); if (pf) { fprintf(pf, "P6\n%d %d\n255\n", NB1_W, NB1_H); fwrite(rgb, 1, NB1_W * NB1_H * 3, pf); fclose(pf); } free(rgb); } }
             if (!settled) card_wait = 1;
+            if (trig && !prev_trig && card_set && settled && capdir && have_roms) { uint8_t *rgb = malloc(NB1_W * NB1_H * 3); nb1_render_composite(st, st, &roms, rgb); char pp[1400]; snprintf(pp, sizeof pp, "%s/shot_%03d_%u.ppm", capdir, pick_id, fr); FILE *pf = fopen(pp, "wb"); if (pf) { fprintf(pf, "P6\n%d %d\n255\n", NB1_W, NB1_H); fwrite(rgb, 1, NB1_W * NB1_H * 3, pf); fclose(pf); } free(rgb); }
             if (trig && !prev_trig && card_set && settled) { pick_quad = (sy > 112) * 2 + (sx > 144); pick_ax = sx; pick_ay = sy; }
         } else { card_set = 0; card_still = 0; card_sig = 0; }
         prev_trig = trig;
