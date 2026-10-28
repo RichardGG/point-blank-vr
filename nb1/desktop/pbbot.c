@@ -35,7 +35,9 @@ static double ct_score(const char *key, const char *want) {
     return known > 0 ? (comp + 1) / (comp + fail + 2) : 0.7; }
 static void entry_box(const Nb1Entry *e, int *x0, int *y0, int *x1, int *y1) { *x0 = e->tiles[0].x; *y0 = e->tiles[0].y; *x1 = *x0; *y1 = *y0; for (int k = 0; k < e->ntiles; k++) { const Nb1Tile *tl = &e->tiles[k]; if (tl->x < *x0) *x0 = tl->x; if (tl->y < *y0) *y0 = tl->y; if (tl->x + tl->w > *x1) *x1 = tl->x + tl->w; if (tl->y + tl->h > *y1) *y1 = tl->y + tl->h; } }
 static unsigned char pbs_bytes[NB1_STATE_FILE_BYTES];      /* the raw bytes of the state being handled, for --capture */
+static char scene_req[200];       /* name of the MAME save state asked for at the latest capture (pbplay.lua saves it when this changes) */
 static void scene_save(const char *dir, int *seq, unsigned fr, int phase, const char *text, unsigned fp, const Nb1GameInfo *gi, const char *tag, const char *extra) {
+    if (strcmp(tag, "bg") || gi->stage == 0) { const char *b = strrchr(dir, '/'); b = b ? b + 1 : dir; snprintf(scene_req, sizeof scene_req, "cap_%s_%d", b, *seq); }      /* every tagged screen and the boot screens get a MAME state next to the RAM snapshot */
     char p[1400]; snprintf(p, sizeof p, "%s/scene_%04d.state", dir, *seq); FILE *f = fopen(p, "wb"); if (f) { fwrite(pbs_bytes, 1, NB1_STATE_FILE_BYTES, f); fclose(f); }
     snprintf(p, sizeof p, "%s/scene_log.tsv", dir); FILE *l = fopen(p, "a"); if (l) { fprintf(l, "%d\t%u\t%d\t%s\t%08x\t%d\t%d\t%d\t%s\t%s\n", *seq, fr, phase, text, fp, gi->stage, gi->mode, gi->diff, tag, extra); fclose(l); }
     (*seq)++;
@@ -151,7 +153,7 @@ int main(int argc, char **argv) {
             static int mn; uint8_t *rgb = malloc(NB1_W * NB1_H * 3); nb1_render_composite(st0, st0, &roms, rgb); int ax = (int)(sx + 0.5), ay = (int)(sy + 0.5);
             for (int d = -6; d <= 6; d++) { int xs[2][2] = { { ax + d, ay }, { ax, ay + d } }; for (int q = 0; q < 2; q++) { int x = xs[q][0], y = xs[q][1]; if (x >= 0 && x < NB1_W && y >= 0 && y < NB1_H) { uint8_t *px = rgb + (y * NB1_W + x) * 3; px[0] = 255; px[1] = trig ? 255 : 0; px[2] = 0; } } }
             char mp[1300]; snprintf(mp, sizeof mp, "%s/m_%05d.ppm", movie_dir, mn++); FILE *mf = fopen(mp, "wb"); if (mf) { fprintf(mf, "P6\n%d %d\n255\n", NB1_W, NB1_H); fwrite(rgb, 1, NB1_W * NB1_H * 3, mf); fclose(mf); } free(rgb); }
-        FILE *f = fopen(aim_tmp, "w"); if (f) { fprintf(f, "%d %.2f %.2f %d %d %d 0 - %s\n", ++seq, sx, sy, trig, coin, start, save_req); fclose(f); remove(aim); rename(aim_tmp, aim); }
+        FILE *f = fopen(aim_tmp, "w"); if (f) { fprintf(f, "%d %.2f %.2f %d %d %d 0 - %s\n", ++seq, sx, sy, trig, coin, start, scene_req[0] ? scene_req : save_req); fclose(f); remove(aim); rename(aim_tmp, aim); }
         free(st0);
         if (steps % 120 == 0) { fprintf(stderr, "%s\n", nb1_bot_status(bot)); if (stats) nb1_bot_save_stats(bot, stats); }
     }
