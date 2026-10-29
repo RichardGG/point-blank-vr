@@ -134,7 +134,7 @@ static double weight_of(Nb1Bot *b, const Cand *c) {
         int idx = -1; for (int i = 0; i < b->stage->norder; i++) if (b->stage->order[i] == c->code) { idx = i; break; }
         if (idx >= 0) w = idx == g_order_min ? 12.0 : 0.01; else w *= 0.05;
     }
-    if (b->stage && b->stage->match_sample) { if (g_sample_code >= 0 && c->code != g_sample_code) w *= 0.02; }
+    if (b->stage && b->stage->match_sample) { if (g_sample_code >= 0 && c->code != g_sample_code) w *= 0.02; if (g_sample_code >= 0 && c->code == g_sample_code && c->cy < 62 && abs(c->cx - 145) < 30) return 0; }      /* never the sample picture itself */
     if (b->cur) {
         for (int i = 0; i < b->cur->na; i++) if (sel_match(&b->cur->avoid[i], c)) return 0;
         int pref = 0; for (int i = 0; i < b->cur->np; i++) if (sel_match(&b->cur->prefer[i], c)) { if (b->cur->prefer[i].weight > w || !pref) w = b->cur->prefer[i].weight; pref = 1; }
@@ -167,6 +167,10 @@ void nb1_bot_step(Nb1Bot *b, const Nb1State *st, const Nb1GameInfo *g, unsigned 
     g_order_min = 1 << 30; g_sample_code = -1; g_frame = frame;
     if (b->stage && b->stage->norder) for (int i = 0; i < ne; i++) { const Nb1Entry *e = &ents[i]; if (!e->ntiles) continue; int t0 = e->tiles[0].t, code = (((t0 & 0x7ff) | (st->bank[(t0 >> 11) & 7] << 11)) + e->offset) & 0x7fff;
         for (int q = 0; q < b->stage->norder; q++) if (b->stage->order[q] == code && q < g_order_min) g_order_min = q; }
+    if (b->stage && b->stage->match_sample) for (int i = 0; i < ne; i++) {      /* "find the matching target": the SAMPLE animal is the 48x48 sprite at the top middle (its frame is code 14483); the targets are the same sprite frames, so a match has the same code */
+        const Nb1Entry *e = &ents[i]; if (!e->ntiles) continue; int x0 = e->tiles[0].x, y0 = e->tiles[0].y, x1 = x0, y1 = y0; for (int k = 0; k < e->ntiles; k++) { const Nb1Tile *t = &e->tiles[k]; if (t->x < x0) x0 = t->x; if (t->y < y0) y0 = t->y; if (t->x + t->w > x1) x1 = t->x + t->w; if (t->y + t->h > y1) y1 = t->y + t->h; }
+        int t0 = e->tiles[0].t, code = (((t0 & 0x7ff) | (st->bank[(t0 >> 11) & 7] << 11)) + e->offset) & 0x7fff;
+        if (x0 >= 114 && x0 <= 128 && y0 >= 2 && y0 <= 14 && x1 - x0 >= 42 && x1 - x0 <= 54 && y1 - y0 >= 42 && y1 - y0 <= 54 && code != 14483 && code != 14471) g_sample_code = code; }
     unsigned dfr = b->have_aim && frame > b->last_frame ? frame - b->last_frame : 2; if (dfr > 30) dfr = 30; b->last_frame = frame;
     for (int i = 0; i < ne; i++) {
         const Nb1Entry *e = &ents[i]; if (!e->ntiles) continue;
