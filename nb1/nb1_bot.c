@@ -121,8 +121,9 @@ static double weight_of(Nb1Bot *b, const Cand *c) {
     else if (gn >= 3) { w = (gh + 0.3) / (gn + 1.0); if (w < 0.04) w = 0.04; proven = gh >= 6 && gh > 0.5 * gn; }
     if (k && k->pen >= 1 && k->pen >= k->hits) return 0;
     if (!k && gn >= 3 && gp >= 2 && gp >= gh) return 0;
+    int spot_dead = 0;
     { int miss = 0, hit = 0; for (int i = 0; i < b->nhist; i++) if (g_frame - b->hist[i].f < 400 && abs(b->hist[i].x - c->cx) < 16 && abs(b->hist[i].y - c->cy) < 16 && b->hist[i].code == c->code) { if (b->hist[i].hit) hit++; else miss++; }
-      if (miss >= 2 && hit == 0) w *= 0.03; else if (miss >= 3 && miss > 2 * hit) w *= 0.1; }                                      /* a spot that keeps missing: nothing there to hit */
+      if (miss >= 2 && hit == 0) { w *= 0.03; spot_dead = 1; } else if (miss >= 3 && miss > 2 * hit) w *= 0.1; }                                      /* a spot that keeps missing: nothing there to hit */
     if (c->still > 45 && !proven) w *= 0.12;                                          /* scenery: it has not moved for a while and nothing says shooting it scores */                          /* shooting it cost a life more often than it scored */
     if (b->stage && b->stage->has_sc) {                                          /* the stage's own rules (written from its rule screen) */
         const BScene *sc = &b->stage->sc;
@@ -130,6 +131,7 @@ static double weight_of(Nb1Bot *b, const Cand *c) {
         int pref = 0; for (int i = 0; i < sc->np; i++) if (sel_match(&sc->prefer[i], c)) { if (sc->prefer[i].weight > w || !pref) w = sc->prefer[i].weight; pref = 1; }
         if (sc->only && !pref) w *= 0.02;
     }
+    if (spot_dead && w > 0.2) w = 0.2;                                           /* a preferred target that keeps missing at the same spot (already gone / not hittable there): a stage's prefer weight does not revive it */
     if (b->stage && b->stage->norder) {
         int idx = -1; for (int i = 0; i < b->stage->norder; i++) if (b->stage->order[i] == c->code) { idx = i; break; }
         if (idx >= 0) w = idx == g_order_min ? 12.0 : 0.01; else w *= 0.05;
@@ -227,6 +229,7 @@ void nb1_bot_step(Nb1Bot *b, const Nb1State *st, const Nb1GameInfo *g, unsigned 
     for (int i = 0; i < nc; i++) {                                                /* one target drawn as several sprite entries (head and body): merge entries that touch */
         if (cs[i].wt < 0.25) continue;
         for (int j = i + 1; j < nc; j++) { if (cs[j].wt < 0.25) continue;
+            if (cs[j].code == cs[i].code && cs[j].col == cs[i].col) continue;                 /* the same sprite twice side by side is two targets (a pattern of small targets), not one target drawn in pieces */
             int ax0 = cs[i].cx - cs[i].w / 2 - 4, ax1 = cs[i].cx + cs[i].w / 2 + 4, ay0 = cs[i].cy - cs[i].h / 2 - 4, ay1 = cs[i].cy + cs[i].h / 2 + 4, bx0 = cs[j].cx - cs[j].w / 2, bx1 = cs[j].cx + cs[j].w / 2, by0 = cs[j].cy - cs[j].h / 2, by1 = cs[j].cy + cs[j].h / 2;
             if (ax1 < bx0 || bx1 < ax0 || ay1 < by0 || by1 < ay0) continue;
             int ux0 = (ax0 + 4 < bx0 ? ax0 + 4 : bx0), ux1 = (ax1 - 4 > bx1 ? ax1 - 4 : bx1), uy0 = (ay0 + 4 < by0 ? ay0 + 4 : by0), uy1 = (ay1 - 4 > by1 ? ay1 - 4 : by1);
@@ -256,7 +259,7 @@ void nb1_bot_step(Nb1Bot *b, const Nb1State *st, const Nb1GameInfo *g, unsigned 
         double ex = tx - b->ax, ey = ty - b->ay;
         if (b->trig_left > 0) { b->trig_left -= (int)dfr; }
         else if (b->gap_left > 0) { b->gap_left -= (int)dfr; }
-        else if (ex * ex + ey * ey < 5.0 * 5.0 && st && pick->wt >= b->d.fire_min && !pick_supp) { b->trig_left = (int)b->d.hold; b->gap_left = (int)b->d.gap; b->shot_code = pick->code; b->shot_col = pick->col; b->shot_frame = frame; if (b->nq < 8) { b->q[b->nq].f = frame; b->q[b->nq].code = pick->code; b->q[b->nq].col = pick->col; b->q[b->nq].x = pick->cx; b->q[b->nq].y = pick->cy; b->q[b->nq].vx = vx; b->q[b->nq].vy = vy; b->q[b->nq].err = sqrt(ex * ex + ey * ey); b->q[b->nq].sscore = g && g->valid ? g->score : 1 << 30; b->q[b->nq].slives = g && g->valid ? g->lives : 0;      /* no game numbers yet: this shot can be judged neither a hit nor a penalty */ b->q[b->nq].done = 0; b->nq++; } for (int q = 7; q > 0; q--) b->rs[q] = b->rs[q - 1]; b->rs[0].x = pick->cx; b->rs[0].y = pick->cy; b->rs[0].f = frame; if (b->nrs < 8) b->nrs++; b->shot_pending = 1; b->target_shots++; b->nshots++;
+        else if (ex * ex + ey * ey < (pick->w <= 18 && pick->h <= 18 ? 1.5 * 1.5 : 5.0 * 5.0) && st && pick->wt >= b->d.fire_min && !pick_supp) { b->trig_left = (int)b->d.hold; b->gap_left = (int)b->d.gap; b->shot_code = pick->code; b->shot_col = pick->col; b->shot_frame = frame; if (b->nq < 8) { b->q[b->nq].f = frame; b->q[b->nq].code = pick->code; b->q[b->nq].col = pick->col; b->q[b->nq].x = pick->cx; b->q[b->nq].y = pick->cy; b->q[b->nq].vx = vx; b->q[b->nq].vy = vy; b->q[b->nq].err = sqrt(ex * ex + ey * ey); b->q[b->nq].sscore = g && g->valid ? g->score : 1 << 30; b->q[b->nq].slives = g && g->valid ? g->lives : 0;      /* no game numbers yet: this shot can be judged neither a hit nor a penalty */ b->q[b->nq].done = 0; b->nq++; } for (int q = 7; q > 0; q--) b->rs[q] = b->rs[q - 1]; b->rs[0].x = pick->cx; b->rs[0].y = pick->cy; b->rs[0].f = frame; if (b->nrs < 8) b->nrs++; b->shot_pending = 1; b->target_shots++; b->nshots++;
                                                          if (g && g->valid) { b->last_score = g->score; b->last_lives = g->lives; b->shot_score = g->score; b->shot_lives = g->lives; } }
         snprintf(b->status, sizeof b->status, "auto: target code %d col %d (w %.2f)  shots %u hits %u penalties %u", pick->code, pick->col, pick->wt, b->nshots, b->nhits, b->npen);
     } else {
