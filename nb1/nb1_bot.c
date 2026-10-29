@@ -173,6 +173,28 @@ void nb1_bot_step(Nb1Bot *b, const Nb1State *st, const Nb1GameInfo *g, unsigned 
         if (x0 >= 114 && x0 <= 128 && y0 >= 2 && y0 <= 14 && x1 - x0 >= 42 && x1 - x0 <= 54 && y1 - y0 >= 42 && y1 - y0 <= 54 && code != 14483 && code != 14471) { g_sample_code = code; g_sample_keep = code; g_sample_f = frame; } }
     if (b->stage && b->stage->match_sample && g_sample_code < 0 && g_sample_keep >= 0 && frame - g_sample_f < 150) g_sample_code = g_sample_keep;      /* the sample sprite is missing on some frames (it animates / changes between rounds): keep the last one for a couple of seconds */
     unsigned dfr = b->have_aim && frame > b->last_frame ? frame - b->last_frame : 2; if (dfr > 30) dfr = 30; b->last_frame = frame;
+    /* "type the same 3-letter word": the word is three dotted 2x2-tile letter sprites near the top (tile numbers 3651..3738, alphabetical: A 3651 ... Y 3734; typed letters turn solid = tile - 96);
+       shoot the matching key of the on-screen keyboard, in any order (a wrong key costs nothing).  Letter table and key positions: research repo game/stages/type-the-word/letters.json. */
+    {
+        static const int LT[26] = { 3651, 3655, 3658, 3662, 3666, 3668, 3670, 3674, 3678, 3680, 3682, 3686, 3688, 3692, 3696, 3700, 3704, 3708, 3712, 3716, 3718, 3722, 3726, 3730, 3734, 3738 };     /* A..Z (Q, S, Z are inferred, not seen) */
+        static unsigned type_wait = 0;
+        int letter = -1, lx = 0;
+        for (int i = 0; i < ne; i++) { const Nb1Entry *e = &ents[i]; if (!e->ntiles || e->ncols != 2 || e->nrows != 2 || e->tiles[0].y < 20 || e->tiles[0].y > 44) continue;
+            int t = e->tiles[0].t; for (int k = 0; k < 26; k++) if (LT[k] == t && (letter < 0 || e->tiles[0].x < lx)) { letter = k; lx = e->tiles[0].x; } }
+        if (letter >= 0) {
+            static const char *ROWS[3] = { "QWERTYUIOP", "ASDFGHJKL", "ZXCVBNM" }; static const int RX[3] = { 36, 46, 60 }, RY[3] = { 99, 124, 147 };
+            double kx = 144, ky = 112; char ch = 'A' + letter;
+            for (int r = 0; r < 3; r++) for (int q = 0; ROWS[r][q]; q++) if (ROWS[r][q] == ch) { kx = RX[r] + 24 * q; ky = RY[r]; }
+            if (!b->have_aim) { b->ax = 144; b->ay = 112; b->have_aim = 1; }
+            double dx = kx - b->ax, dy = ky - b->ay, dist = sqrt(dx * dx + dy * dy), step = b->d.speed * dfr; if (dist > step) { dx *= step / dist; dy *= step / dist; } b->ax += dx; b->ay += dy;
+            double ex = kx - b->ax, ey = ky - b->ay;
+            if (b->trig_left > 0) b->trig_left -= (int)dfr;
+            else if (frame >= type_wait && ex * ex + ey * ey < 3.0 * 3.0) { b->trig_left = (int)b->d.hold; type_wait = frame + 18; b->nshots++; }
+            b->have_target = 0; b->nprev = 0;
+            snprintf(b->status, sizeof b->status, "auto: typing %c", ch);
+            *sx = b->ax; *sy = b->ay; *trig = b->trig_left > 0; *coin = *start = 0; credits(b, g, frame, coin, start); return;
+        }
+    }
     for (int i = 0; i < ne; i++) {
         const Nb1Entry *e = &ents[i]; if (!e->ntiles) continue;
         int x0 = e->tiles[0].x, y0 = e->tiles[0].y, x1 = x0, y1 = y0; for (int k = 0; k < e->ntiles; k++) { const Nb1Tile *t = &e->tiles[k]; if (t->x < x0) x0 = t->x; if (t->y < y0) y0 = t->y; if (t->x + t->w > x1) x1 = t->x + t->w; if (t->y + t->h > y1) y1 = t->y + t->h; }
