@@ -11,11 +11,11 @@
 #include <string.h>
 #include <math.h>
 
-typedef struct { int code_lo, code_hi, col_lo, col_hi, pri_lo, pri_hi; double weight; } BSel;
+typedef struct { int code_lo, code_hi, col_lo, col_hi, pri_lo, pri_hi; double weight, ax, ay; } BSel;
 typedef struct { char name[64]; int only; BSel *prefer, *avoid; int np, na; } BScene;
 typedef struct { int code, col; double n, hits, pen; } BKey;
 typedef struct { char id[160]; char text[160]; BKey *keys; int nkeys, cap; BScene sc; int has_sc; int *order, norder; int match_sample, multihit, has_lead; double lead; } BStage;       /* what one stage (difficulty, stage counter, card) has taught: its own sprite statistics and the sentence the game shows before it */
-typedef struct { int code, col, pri, cx, cy, w, h; double wt; int still; } Cand;       /* still: frames it has been at the same place (scenery) */
+typedef struct { int code, col, pri, cx, cy, w, h; double wt; int still; double ox, oy; } Cand;       /* still: frames it has been at the same place (scenery) */
 typedef struct { double min_size, max_size, unknown, speed, gap, hold, lead, fire_min; } BDef;
 
 struct Nb1Bot {
@@ -32,12 +32,13 @@ struct Nb1Bot {
 static int sel_parse(const Json *a, BSel **out) {
     int n = a && a->t == J_ARR ? a->n : 0; *out = calloc((size_t)(n ? n : 1), sizeof **out);
     for (int i = 0; i < n; i++) {
-        const Json *o = a->kid[i]; BSel *s = &(*out)[i]; s->code_lo = 0; s->code_hi = 1 << 30; s->col_lo = 0; s->col_hi = 15; s->pri_lo = 0; s->pri_hi = 15; s->weight = 3;
+        const Json *o = a->kid[i]; BSel *s = &(*out)[i]; s->code_lo = 0; s->code_hi = 1 << 30; s->col_lo = 0; s->col_hi = 15; s->pri_lo = 0; s->pri_hi = 15; s->weight = 3; s->ax = s->ay = 0;
         const Json *v;
         if ((v = json_get(o, "code"))) { if (v->t == J_ARR && v->n == 2) { s->code_lo = (int)v->kid[0]->num; s->code_hi = (int)v->kid[1]->num; } else if (v->t == J_NUM) s->code_lo = s->code_hi = (int)v->num; }
         if ((v = json_get(o, "col"))) { if (v->t == J_ARR && v->n == 2) { s->col_lo = (int)v->kid[0]->num; s->col_hi = (int)v->kid[1]->num; } else if (v->t == J_NUM) s->col_lo = s->col_hi = (int)v->num; }
         if ((v = json_get(o, "pri"))) { if (v->t == J_ARR && v->n == 2) { s->pri_lo = (int)v->kid[0]->num; s->pri_hi = (int)v->kid[1]->num; } else if (v->t == J_NUM) s->pri_lo = s->pri_hi = (int)v->num; }
         if ((v = json_get(o, "weight"))) s->weight = v->num;
+        if ((v = json_get(o, "ax"))) s->ax = v->num; if ((v = json_get(o, "ay"))) s->ay = v->num;      /* aim offset from the sprite box centre (the drawn part of the sprite is not always in the middle of its tiles) */
     }
     return n;
 }
@@ -109,7 +110,9 @@ int nb1_bot_save_stats(const Nb1Bot *b, const char *path) {
 static unsigned g_frame = 0;
 static int g_order_min = 1 << 30;                                    /* lowest position in the stage's "order" among the targets visible now */
 static int g_sample_code = -1, g_sample_keep = -1; static unsigned g_sample_f = 0;                                       /* the code of the SAMPLE target in a "match the sample" stage */
+static double g_ox, g_oy;                                                    /* aim offset of the prefer entry that matched the last weight_of() call */
 static double weight_of(Nb1Bot *b, const Cand *c) {
+    g_ox = g_oy = 0;
     double w = b->d.unknown; BKey *k = key_get(b, c->code, c->col, 0), *sk = b->stage ? keys_get(&b->stage->keys, &b->stage->nkeys, &b->stage->cap, c->code, c->col, 0) : NULL;
     if (sk && sk->n >= 3) k = sk;                                                  /* what this very stage has shown beats the general statistics */
     double gn = 0, gh = 0, gp = 0;                                                  /* the sprite family (the 16 codes around: animation frames of one creature): used when this exact sprite has little data */
@@ -128,7 +131,7 @@ static double weight_of(Nb1Bot *b, const Cand *c) {
     if (b->stage && b->stage->has_sc) {                                          /* the stage's own rules (written from its rule screen) */
         const BScene *sc = &b->stage->sc;
         for (int i = 0; i < sc->na; i++) if (sel_match(&sc->avoid[i], c)) return 0;
-        int pref = 0; for (int i = 0; i < sc->np; i++) if (sel_match(&sc->prefer[i], c)) { if (sc->prefer[i].weight > w || !pref) w = sc->prefer[i].weight; pref = 1; }
+        int pref = 0; for (int i = 0; i < sc->np; i++) if (sel_match(&sc->prefer[i], c)) { if (sc->prefer[i].weight > w || !pref) { w = sc->prefer[i].weight; g_ox = sc->prefer[i].ax; g_oy = sc->prefer[i].ay; } pref = 1; }
         if (sc->only && !pref) w *= 0.02;
     }
     if (spot_dead && w > 0.2) w = 0.2;                                           /* a preferred target that keeps missing at the same spot (already gone / not hittable there): a stage's prefer weight does not revive it */
@@ -205,7 +208,7 @@ void nb1_bot_step(Nb1Bot *b, const Nb1State *st, const Nb1GameInfo *g, unsigned 
         Cand c = { code, e->color, e->pri, (x0 + x1) / 2, (y0 + y1) / 2, x1 - x0, y1 - y0, 0 };
         if (is_hud_code(code) || c.pri >= 6 || c.w < b->d.min_size || c.h < b->d.min_size || c.w > b->d.max_size || c.h > b->d.max_size || c.cx < 3 || c.cx > 284 || c.cy < 3 || c.cy > 220) continue;
         c.still = 0; for (int q = 0; q < b->nprev; q++) if (b->prev[q].code == c.code && b->prev[q].col == c.col && abs(b->prev[q].cx - c.cx) <= 1 && abs(b->prev[q].cy - c.cy) <= 1) { c.still = b->prev[q].still + (int)dfr; break; }
-        c.wt = weight_of(b, &c); if (c.wt > 0) cs[nc++] = c;
+        c.wt = weight_of(b, &c); c.ox = g_ox; c.oy = g_oy; if (c.wt > 0) cs[nc++] = c;
     }
     if (getenv("NB1_BOT_DEBUG") && (frame / 2) % 30 == 0) { fprintf(stderr, "bot f%u stage '%s' aim %.0f,%.0f sample %d cands:", frame, b->stage ? b->stage->text[0] ? b->stage->text : b->stage->id : "-", b->ax, b->ay, g_sample_code); for (int i = 0; i < nc; i++) fprintf(stderr, " [%d:%d p%d %dx%d @%d,%d w%.2f]", cs[i].code, cs[i].col, cs[i].pri, cs[i].w, cs[i].h, cs[i].cx, cs[i].cy, cs[i].wt); fprintf(stderr, "\n"); }
     /* learning: every shot waits (up to 45 frames) for the game's verdict: the score word rising (a hit) or a life lost (a penalty). A rise is credited to one shot only. */
@@ -234,7 +237,7 @@ void nb1_bot_step(Nb1Bot *b, const Nb1State *st, const Nb1GameInfo *g, unsigned 
             if (ax1 < bx0 || bx1 < ax0 || ay1 < by0 || by1 < ay0) continue;
             int ux0 = (ax0 + 4 < bx0 ? ax0 + 4 : bx0), ux1 = (ax1 - 4 > bx1 ? ax1 - 4 : bx1), uy0 = (ay0 + 4 < by0 ? ay0 + 4 : by0), uy1 = (ay1 - 4 > by1 ? ay1 - 4 : by1);
             if (ux1 - ux0 > 96 || uy1 - uy0 > 112) continue;
-            if (cs[j].wt > cs[i].wt) { cs[i].code = cs[j].code; cs[i].col = cs[j].col; cs[i].wt = cs[j].wt; cs[i].pri = cs[j].pri; }
+            if (cs[j].wt > cs[i].wt) { cs[i].code = cs[j].code; cs[i].col = cs[j].col; cs[i].wt = cs[j].wt; cs[i].pri = cs[j].pri; cs[i].ox = cs[j].ox; cs[i].oy = cs[j].oy; }
             cs[i].cx = (ux0 + ux1) / 2; cs[i].cy = (uy0 + uy1) / 2; cs[i].w = ux1 - ux0; cs[i].h = uy1 - uy0; cs[j] = cs[--nc]; j = i; }
     }
     /* choose the target: keep the current one while it is still there and has not had its chances */
@@ -252,7 +255,7 @@ void nb1_bot_step(Nb1Bot *b, const Nb1State *st, const Nb1GameInfo *g, unsigned 
         double vx = 0, vy = 0;                                                 /* a moving target: lead it by its speed over the last state */
         for (int i = 0; i < b->nprev; i++) if (b->prev[i].code == pick->code && abs(b->prev[i].cx - pick->cx) < 30 && abs(b->prev[i].cy - pick->cy) < 30) { vx = (pick->cx - b->prev[i].cx) / (double)dfr; vy = (pick->cy - b->prev[i].cy) / (double)dfr; break; }
         double ld = b->stage && b->stage->has_lead ? b->stage->lead : b->d.lead;      /* a stage can set its own lead (fast flyers such as clay targets need less) */
-        double tx = pick->cx + vx * ld, ty = pick->cy + vy * ld;
+        double tx = pick->cx + pick->ox + vx * ld, ty = pick->cy + pick->oy + vy * ld;
         if (!b->have_aim) { b->ax = tx; b->ay = ty; b->have_aim = 1; }
         double dx = tx - b->ax, dy = ty - b->ay, dist = sqrt(dx * dx + dy * dy), step = b->d.speed * dfr; if (dist > step) { dx *= step / dist; dy *= step / dist; }
         b->ax += dx; b->ay += dy;
