@@ -14,7 +14,7 @@
 typedef struct { int code_lo, code_hi, col_lo, col_hi, pri_lo, pri_hi; double weight; } BSel;
 typedef struct { char name[64]; int only; BSel *prefer, *avoid; int np, na; } BScene;
 typedef struct { int code, col; double n, hits, pen; } BKey;
-typedef struct { char id[160]; char text[160]; BKey *keys; int nkeys, cap; BScene sc; int has_sc; int *order, norder; int match_sample, multihit; } BStage;       /* what one stage (difficulty, stage counter, card) has taught: its own sprite statistics and the sentence the game shows before it */
+typedef struct { char id[160]; char text[160]; BKey *keys; int nkeys, cap; BScene sc; int has_sc; int *order, norder; int match_sample, multihit, has_lead; double lead; } BStage;       /* what one stage (difficulty, stage counter, card) has taught: its own sprite statistics and the sentence the game shows before it */
 typedef struct { int code, col, pri, cx, cy, w, h; double wt; int still; } Cand;       /* still: frames it has been at the same place (scenery) */
 typedef struct { double min_size, max_size, unknown, speed, gap, hold, lead, fire_min; } BDef;
 
@@ -73,7 +73,7 @@ Nb1Bot *nb1_bot_new(const char *rules_path) {
             if ((v = json_get(o, "text")) && v->t == J_STR) snprintf(g->text, sizeof g->text, "%s", v->str);
             g->has_sc = 1; g->sc.only = (v = json_get(o, "only")) && v->num != 0; g->sc.np = sel_parse(json_get(o, "prefer"), &g->sc.prefer); g->sc.na = sel_parse(json_get(o, "avoid"), &g->sc.avoid);
             if ((v = json_get(o, "order")) && v->t == J_ARR) { g->norder = v->n; g->order = malloc((size_t)(v->n ? v->n : 1) * sizeof *g->order); for (int q = 0; q < v->n; q++) g->order[q] = (int)v->kid[q]->num; }   /* codes to shoot in this sequence */
-            g->match_sample = (v = json_get(o, "match_sample")) && v->num != 0; g->multihit = (v = json_get(o, "multihit")) && v->num != 0;
+            g->match_sample = (v = json_get(o, "match_sample")) && v->num != 0; g->multihit = (v = json_get(o, "multihit")) && v->num != 0; if ((v = json_get(o, "lead"))) { g->lead = v->num; g->has_lead = 1; }
             const Json *kk = json_get(o, "keys"); if (kk && kk->t == J_ARR) for (int q = 0; q < kk->n; q++) { const Json *r = kk->kid[q]; if (r->t != J_ARR || r->n < 5) continue;
                 BKey *k = keys_get(&g->keys, &g->nkeys, &g->cap, (int)r->kid[0]->num, (int)r->kid[1]->num, 1); k->n = r->kid[2]->num; k->hits = r->kid[3]->num; k->pen = r->kid[4]->num; } } }
     const Json *sc = json_get(j, "scenes");
@@ -248,14 +248,15 @@ void nb1_bot_step(Nb1Bot *b, const Nb1State *st, const Nb1GameInfo *g, unsigned 
         b->have_target = 1; b->cur_code = pick->code; b->cur_col = pick->col; b->cur_cx = pick->cx; b->cur_cy = pick->cy;
         double vx = 0, vy = 0;                                                 /* a moving target: lead it by its speed over the last state */
         for (int i = 0; i < b->nprev; i++) if (b->prev[i].code == pick->code && abs(b->prev[i].cx - pick->cx) < 30 && abs(b->prev[i].cy - pick->cy) < 30) { vx = (pick->cx - b->prev[i].cx) / (double)dfr; vy = (pick->cy - b->prev[i].cy) / (double)dfr; break; }
-        double tx = pick->cx + vx * b->d.lead, ty = pick->cy + vy * b->d.lead;
+        double ld = b->stage && b->stage->has_lead ? b->stage->lead : b->d.lead;      /* a stage can set its own lead (fast flyers such as clay targets need less) */
+        double tx = pick->cx + vx * ld, ty = pick->cy + vy * ld;
         if (!b->have_aim) { b->ax = tx; b->ay = ty; b->have_aim = 1; }
         double dx = tx - b->ax, dy = ty - b->ay, dist = sqrt(dx * dx + dy * dy), step = b->d.speed * dfr; if (dist > step) { dx *= step / dist; dy *= step / dist; }
         b->ax += dx; b->ay += dy;
         double ex = tx - b->ax, ey = ty - b->ay;
         if (b->trig_left > 0) { b->trig_left -= (int)dfr; }
         else if (b->gap_left > 0) { b->gap_left -= (int)dfr; }
-        else if (ex * ex + ey * ey < 5.0 * 5.0 && st && pick->wt >= b->d.fire_min && !pick_supp) { b->trig_left = (int)b->d.hold; b->gap_left = (int)b->d.gap; b->shot_code = pick->code; b->shot_col = pick->col; b->shot_frame = frame; if (b->nq < 8) { b->q[b->nq].f = frame; b->q[b->nq].code = pick->code; b->q[b->nq].col = pick->col; b->q[b->nq].x = pick->cx; b->q[b->nq].y = pick->cy; b->q[b->nq].vx = vx; b->q[b->nq].vy = vy; b->q[b->nq].err = sqrt(ex * ex + ey * ey); b->q[b->nq].sscore = g && g->valid ? g->score : 0; b->q[b->nq].slives = g && g->valid ? g->lives : 9; b->q[b->nq].done = 0; b->nq++; } for (int q = 7; q > 0; q--) b->rs[q] = b->rs[q - 1]; b->rs[0].x = pick->cx; b->rs[0].y = pick->cy; b->rs[0].f = frame; if (b->nrs < 8) b->nrs++; b->shot_pending = 1; b->target_shots++; b->nshots++;
+        else if (ex * ex + ey * ey < 5.0 * 5.0 && st && pick->wt >= b->d.fire_min && !pick_supp) { b->trig_left = (int)b->d.hold; b->gap_left = (int)b->d.gap; b->shot_code = pick->code; b->shot_col = pick->col; b->shot_frame = frame; if (b->nq < 8) { b->q[b->nq].f = frame; b->q[b->nq].code = pick->code; b->q[b->nq].col = pick->col; b->q[b->nq].x = pick->cx; b->q[b->nq].y = pick->cy; b->q[b->nq].vx = vx; b->q[b->nq].vy = vy; b->q[b->nq].err = sqrt(ex * ex + ey * ey); b->q[b->nq].sscore = g && g->valid ? g->score : 1 << 30; b->q[b->nq].slives = g && g->valid ? g->lives : 0;      /* no game numbers yet: this shot can be judged neither a hit nor a penalty */ b->q[b->nq].done = 0; b->nq++; } for (int q = 7; q > 0; q--) b->rs[q] = b->rs[q - 1]; b->rs[0].x = pick->cx; b->rs[0].y = pick->cy; b->rs[0].f = frame; if (b->nrs < 8) b->nrs++; b->shot_pending = 1; b->target_shots++; b->nshots++;
                                                          if (g && g->valid) { b->last_score = g->score; b->last_lives = g->lives; b->shot_score = g->score; b->shot_lives = g->lives; } }
         snprintf(b->status, sizeof b->status, "auto: target code %d col %d (w %.2f)  shots %u hits %u penalties %u", pick->code, pick->col, pick->wt, b->nshots, b->nhits, b->npen);
     } else {
