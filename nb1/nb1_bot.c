@@ -213,10 +213,12 @@ void nb1_bot_step(Nb1Bot *b, const Nb1State *st, const Nb1GameInfo *g, unsigned 
     if (getenv("NB1_BOT_DEBUG") && (frame / 2) % 30 == 0) { fprintf(stderr, "bot f%u stage '%s' aim %.0f,%.0f sample %d cands:", frame, b->stage ? b->stage->text[0] ? b->stage->text : b->stage->id : "-", b->ax, b->ay, g_sample_code); for (int i = 0; i < nc; i++) fprintf(stderr, " [%d:%d p%d %dx%d @%d,%d w%.2f]", cs[i].code, cs[i].col, cs[i].pri, cs[i].w, cs[i].h, cs[i].cx, cs[i].cy, cs[i].wt); fprintf(stderr, "\n"); }
     /* learning: every shot waits (up to 45 frames) for the game's verdict: the score word rising (a hit) or a life lost (a penalty). A rise is credited to one shot only. */
     if (g && g->valid && g->lives > b->lives_claimed) b->lives_claimed = 99;                  /* lives went up: a new game */
+    int banner_edge = hit_visible && !b->last_hit_visible;
     for (int i = 0; i < b->nq; i++) {
         if (b->q[i].done) continue; unsigned age = frame - b->q[i].f; int hit = 0, pen = 0;
         if (g && g->valid) { int base = b->q[i].sscore > b->score_claimed ? b->q[i].sscore : b->score_claimed; hit = g->score - base >= 10 && g->score - base < 5000; pen = g->lives < b->q[i].slives && g->lives < b->lives_claimed; }
         else hit = hit_visible && !b->last_hit_visible && age <= 20;
+        if (!hit && !pen && banner_edge && age >= 4 && age <= 18) { hit = 1; banner_edge = 0; }          /* the HIT! banner appears 7-8 frames after the shot: a hit the score word did not show (stages where the score does not jump by 10) */
         if (hit && age > 16) hit = 0;                                                   /* a hit shows in the score within a few frames: a later rise is some other shot's */
         if (!pen && !hit && age <= 40) continue;
         BKey *k = key_get(b, b->q[i].code, b->q[i].col, 1), *sk = skey_get(b, b->q[i].code, b->q[i].col, 1);
