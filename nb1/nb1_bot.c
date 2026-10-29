@@ -108,7 +108,7 @@ int nb1_bot_save_stats(const Nb1Bot *b, const char *path) {
 
 static unsigned g_frame = 0;
 static int g_order_min = 1 << 30;                                    /* lowest position in the stage's "order" among the targets visible now */
-static int g_sample_code = -1;                                       /* the code of the SAMPLE target in a "match the sample" stage */
+static int g_sample_code = -1, g_sample_keep = -1; static unsigned g_sample_f = 0;                                       /* the code of the SAMPLE target in a "match the sample" stage */
 static double weight_of(Nb1Bot *b, const Cand *c) {
     double w = b->d.unknown; BKey *k = key_get(b, c->code, c->col, 0), *sk = b->stage ? keys_get(&b->stage->keys, &b->stage->nkeys, &b->stage->cap, c->code, c->col, 0) : NULL;
     if (sk && sk->n >= 3) k = sk;                                                  /* what this very stage has shown beats the general statistics */
@@ -170,7 +170,8 @@ void nb1_bot_step(Nb1Bot *b, const Nb1State *st, const Nb1GameInfo *g, unsigned 
     if (b->stage && b->stage->match_sample) for (int i = 0; i < ne; i++) {      /* "find the matching target": the SAMPLE animal is the 48x48 sprite at the top middle (its frame is code 14483); the targets are the same sprite frames, so a match has the same code */
         const Nb1Entry *e = &ents[i]; if (!e->ntiles) continue; int x0 = e->tiles[0].x, y0 = e->tiles[0].y, x1 = x0, y1 = y0; for (int k = 0; k < e->ntiles; k++) { const Nb1Tile *t = &e->tiles[k]; if (t->x < x0) x0 = t->x; if (t->y < y0) y0 = t->y; if (t->x + t->w > x1) x1 = t->x + t->w; if (t->y + t->h > y1) y1 = t->y + t->h; }
         int t0 = e->tiles[0].t, code = (((t0 & 0x7ff) | (st->bank[(t0 >> 11) & 7] << 11)) + e->offset) & 0x7fff;
-        if (x0 >= 114 && x0 <= 128 && y0 >= 2 && y0 <= 14 && x1 - x0 >= 42 && x1 - x0 <= 54 && y1 - y0 >= 42 && y1 - y0 <= 54 && code != 14483 && code != 14471) g_sample_code = code; }
+        if (x0 >= 114 && x0 <= 128 && y0 >= 2 && y0 <= 14 && x1 - x0 >= 42 && x1 - x0 <= 54 && y1 - y0 >= 42 && y1 - y0 <= 54 && code != 14483 && code != 14471) { g_sample_code = code; g_sample_keep = code; g_sample_f = frame; } }
+    if (b->stage && b->stage->match_sample && g_sample_code < 0 && g_sample_keep >= 0 && frame - g_sample_f < 150) g_sample_code = g_sample_keep;      /* the sample sprite is missing on some frames (it animates / changes between rounds): keep the last one for a couple of seconds */
     unsigned dfr = b->have_aim && frame > b->last_frame ? frame - b->last_frame : 2; if (dfr > 30) dfr = 30; b->last_frame = frame;
     for (int i = 0; i < ne; i++) {
         const Nb1Entry *e = &ents[i]; if (!e->ntiles) continue;
@@ -182,7 +183,7 @@ void nb1_bot_step(Nb1Bot *b, const Nb1State *st, const Nb1GameInfo *g, unsigned 
         c.still = 0; for (int q = 0; q < b->nprev; q++) if (b->prev[q].code == c.code && b->prev[q].col == c.col && abs(b->prev[q].cx - c.cx) <= 1 && abs(b->prev[q].cy - c.cy) <= 1) { c.still = b->prev[q].still + (int)dfr; break; }
         c.wt = weight_of(b, &c); if (c.wt > 0) cs[nc++] = c;
     }
-    if (getenv("NB1_BOT_DEBUG") && (frame / 2) % 30 == 0) { fprintf(stderr, "bot f%u stage '%s' aim %.0f,%.0f cands:", frame, b->stage ? b->stage->text[0] ? b->stage->text : b->stage->id : "-", b->ax, b->ay); for (int i = 0; i < nc; i++) fprintf(stderr, " [%d:%d p%d %dx%d @%d,%d w%.2f]", cs[i].code, cs[i].col, cs[i].pri, cs[i].w, cs[i].h, cs[i].cx, cs[i].cy, cs[i].wt); fprintf(stderr, "\n"); }
+    if (getenv("NB1_BOT_DEBUG") && (frame / 2) % 30 == 0) { fprintf(stderr, "bot f%u stage '%s' aim %.0f,%.0f sample %d cands:", frame, b->stage ? b->stage->text[0] ? b->stage->text : b->stage->id : "-", b->ax, b->ay, g_sample_code); for (int i = 0; i < nc; i++) fprintf(stderr, " [%d:%d p%d %dx%d @%d,%d w%.2f]", cs[i].code, cs[i].col, cs[i].pri, cs[i].w, cs[i].h, cs[i].cx, cs[i].cy, cs[i].wt); fprintf(stderr, "\n"); }
     /* learning: every shot waits (up to 45 frames) for the game's verdict: the score word rising (a hit) or a life lost (a penalty). A rise is credited to one shot only. */
     if (g && g->valid && g->lives > b->lives_claimed) b->lives_claimed = 99;                  /* lives went up: a new game */
     for (int i = 0; i < b->nq; i++) {
