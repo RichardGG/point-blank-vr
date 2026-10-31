@@ -11,10 +11,10 @@
 #include <string.h>
 #include <math.h>
 
-typedef struct { int code_lo, code_hi, col_lo, col_hi, pri_lo, pri_hi; double weight, ax, ay; } BSel;
+typedef struct { int code_lo, code_hi, col_lo, col_hi, pri_lo, pri_hi; double weight, ax, ay, fx, fy; } BSel;
 typedef struct { char name[64]; int only; BSel *prefer, *avoid; int np, na; } BScene;
 typedef struct { int code, col; double n, hits, pen; } BKey;
-typedef struct { char id[160]; char text[160]; BKey *keys; int nkeys, cap; BScene sc; int has_sc; int *order, norder; int match_sample, multihit, has_lead, has_gap, nearest, aim_visible, nboat, boat[8], hlo, hhi; double lead, gap, vis_min, aim_frac, vis_min_big, boat_min, boat_max, boat_sigma, drop_speed, boat_y, boat_speed, threat_x, threat_y; int has_threat; } BStage;       /* what one stage (difficulty, stage counter, card) has taught: its own sprite statistics and the sentence the game shows before it */
+typedef struct { char id[160]; char text[160]; BKey *keys; int nkeys, cap; BScene sc; int has_sc; int *order, norder; int match_sample, multihit, has_lead, has_gap, nearest, aim_visible, nboat, boat[8], hlo, hhi; double lead, gap, vis_min, aim_frac, vis_min_big, boat_min, boat_max, boat_sigma, drop_speed, boat_y, boat_speed, threat_x, threat_y; int has_threat, frac_aim; } BStage;       /* what one stage (difficulty, stage counter, card) has taught: its own sprite statistics and the sentence the game shows before it */
 typedef struct { int code, col, pri, cx, cy, w, h; double wt; int still; double ox, oy, pbp, phx, pT, pbv; } Cand;       /* still: frames it has been at the same place (scenery) */
 typedef struct { double min_size, max_size, unknown, speed, gap, hold, lead, fire_min; } BDef;
 
@@ -32,13 +32,13 @@ struct Nb1Bot {
 static int sel_parse(const Json *a, BSel **out) {
     int n = a && a->t == J_ARR ? a->n : 0; *out = calloc((size_t)(n ? n : 1), sizeof **out);
     for (int i = 0; i < n; i++) {
-        const Json *o = a->kid[i]; BSel *s = &(*out)[i]; s->code_lo = 0; s->code_hi = 1 << 30; s->col_lo = 0; s->col_hi = 15; s->pri_lo = 0; s->pri_hi = 15; s->weight = 3; s->ax = s->ay = 0;
+        const Json *o = a->kid[i]; BSel *s = &(*out)[i]; s->code_lo = 0; s->code_hi = 1 << 30; s->col_lo = 0; s->col_hi = 15; s->pri_lo = 0; s->pri_hi = 15; s->weight = 3; s->ax = s->ay = s->fx = s->fy = 0;
         const Json *v;
         if ((v = json_get(o, "code"))) { if (v->t == J_ARR && v->n == 2) { s->code_lo = (int)v->kid[0]->num; s->code_hi = (int)v->kid[1]->num; } else if (v->t == J_NUM) s->code_lo = s->code_hi = (int)v->num; }
         if ((v = json_get(o, "col"))) { if (v->t == J_ARR && v->n == 2) { s->col_lo = (int)v->kid[0]->num; s->col_hi = (int)v->kid[1]->num; } else if (v->t == J_NUM) s->col_lo = s->col_hi = (int)v->num; }
         if ((v = json_get(o, "pri"))) { if (v->t == J_ARR && v->n == 2) { s->pri_lo = (int)v->kid[0]->num; s->pri_hi = (int)v->kid[1]->num; } else if (v->t == J_NUM) s->pri_lo = s->pri_hi = (int)v->num; }
         if ((v = json_get(o, "weight"))) s->weight = v->num;
-        if ((v = json_get(o, "ax"))) s->ax = v->num; if ((v = json_get(o, "ay"))) s->ay = v->num;      /* aim offset from the sprite box centre (the drawn part of the sprite is not always in the middle of its tiles) */
+        if ((v = json_get(o, "ax"))) s->ax = v->num; if ((v = json_get(o, "ay"))) s->ay = v->num; if ((v = json_get(o, "fx"))) s->fx = v->num; if ((v = json_get(o, "fy"))) s->fy = v->num;      /* fx, fy: the drawn part's offset as a fraction of the sprite box (bigger sprites) */      /* aim offset from the sprite box centre (the drawn part of the sprite is not always in the middle of its tiles) */
     }
     return n;
 }
@@ -77,6 +77,7 @@ Nb1Bot *nb1_bot_new(const char *rules_path) {
             g->match_sample = (v = json_get(o, "match_sample")) && v->num != 0; g->multihit = (v = json_get(o, "multihit")) && v->num != 0; if ((v = json_get(o, "lead"))) { g->lead = v->num; g->has_lead = 1; } if ((v = json_get(o, "gap"))) { g->gap = v->num; g->has_gap = 1; } g->nearest = (v = json_get(o, "nearest")) && v->num != 0; g->aim_visible = (v = json_get(o, "aim_visible")) && v->num != 0; g->vis_min = (v = json_get(o, "vis_min")) ? v->num : 0; g->vis_min_big = (v = json_get(o, "vis_min_big")) ? v->num : -1; g->aim_frac = (v = json_get(o, "aim_frac")) ? v->num : -1;
             if ((v = json_get(o, "boat")) && v->t == J_ARR) { g->nboat = v->n < 8 ? v->n : 8; for (int q = 0; q < g->nboat; q++) g->boat[q] = (int)v->kid[q]->num; }      /* hostage stages: sprite codes of the player's boat (96x32), the code range of the hostages, where the boat can be, how fast a hostage falls */
             g->hlo = (v = json_get(o, "hostage_lo")) ? (int)v->num : 0; g->hhi = (v = json_get(o, "hostage_hi")) ? (int)v->num : 0; g->boat_min = (v = json_get(o, "boat_min")) ? v->num : 70; g->boat_max = (v = json_get(o, "boat_max")) ? v->num : 255; g->boat_sigma = (v = json_get(o, "boat_sigma")) ? v->num : 22; g->drop_speed = (v = json_get(o, "drop_speed")) ? v->num : 3.5; g->boat_y = (v = json_get(o, "boat_y")) ? v->num : 150; g->boat_speed = (v = json_get(o, "boat_speed")) ? v->num : 1.75;
+            g->frac_aim = (v = json_get(o, "frac_aim")) && v->num != 0;
             if ((v = json_get(o, "threat")) && v->t == J_ARR && v->n >= 2) { g->threat_x = v->kid[0]->num; g->threat_y = v->kid[1]->num; g->has_threat = 1; }      /* the thing the targets are heading for (a doctor in the centre): the closest target to it first */
             const Json *kk = json_get(o, "keys"); if (kk && kk->t == J_ARR) for (int q = 0; q < kk->n; q++) { const Json *r = kk->kid[q]; if (r->t != J_ARR || r->n < 5) continue;
                 BKey *k = keys_get(&g->keys, &g->nkeys, &g->cap, (int)r->kid[0]->num, (int)r->kid[1]->num, 1); k->n = r->kid[2]->num; k->hits = r->kid[3]->num; k->pen = r->kid[4]->num; } } }
@@ -116,9 +117,9 @@ static unsigned g_frame = 0;
 static int g_order_min = 1 << 30, g_true_min = 1 << 30;           /* g_true_min: the real lowest (g_order_min can be forced by the NB1_BOT_WRONG5 test) */
 static int g_lock_code[32]; static unsigned g_lock_until[32]; static int g_nlock;      /* numbers shot out of order lock for about 4 s (seen: the tile greys out, 240 frames) */                                    /* lowest position in the stage's "order" among the targets visible now */
 static int g_sample_code = -1, g_sample_keep = -1; static unsigned g_sample_f = 0;                                       /* the code of the SAMPLE target in a "match the sample" stage */
-static double g_ox, g_oy;                                                    /* aim offset of the prefer entry that matched the last weight_of() call */
+static double g_ox, g_oy, g_fx, g_fy;                                                    /* aim offset of the prefer entry that matched the last weight_of() call */
 static double weight_of(Nb1Bot *b, const Cand *c) {
-    g_ox = g_oy = 0;
+    g_ox = g_oy = g_fx = g_fy = 0;
     double w = b->d.unknown; BKey *k = key_get(b, c->code, c->col, 0), *sk = b->stage ? keys_get(&b->stage->keys, &b->stage->nkeys, &b->stage->cap, c->code, c->col, 0) : NULL;
     if (sk && sk->n >= 3) k = sk;                                                  /* what this very stage has shown beats the general statistics */
     double gn = 0, gh = 0, gp = 0;                                                  /* the sprite family (the 16 codes around: animation frames of one creature): used when this exact sprite has little data */
@@ -128,8 +129,9 @@ static double weight_of(Nb1Bot *b, const Cand *c) {
     if (k && k->n >= 3) { w = (k->hits + 0.3) / (k->n + 1.0); if (w < 0.04) w = 0.04; proven = k->hits >= 3 && k->hits > 0.5 * k->n; }
     else if (k && k->n > 0) { w = (k->hits + 0.3 + gh) / (k->n + 1.0 + gn); if (w < 0.04) w = 0.04; }
     else if (gn >= 3) { w = (gh + 0.3) / (gn + 1.0); if (w < 0.04) w = 0.04; proven = gh >= 6 && gh > 0.5 * gn; }
-    if (k && k->pen >= 1 && k->pen >= k->hits) return 0;
-    if (!k && gn >= 3 && gp >= 2 && gp >= gh) return 0;
+    int forced = 0; if (b->stage && b->stage->has_sc) for (int i = 0; i < b->stage->sc.np; i++) if (sel_match(&b->stage->sc.prefer[i], c) && b->stage->sc.prefer[i].weight >= 1.0) forced = 1;      /* a sprite the stage's rules name as a target: what an earlier (random-firing) campaign learned about it must not veto it */
+    if (!forced && k && k->pen >= 1 && k->pen >= k->hits) return 0;
+    if (!forced && !k && gn >= 3 && gp >= 2 && gp >= gh) return 0;
     int spot_dead = 0;
     if (!(b->stage && b->stage->nearest)) { int miss = 0, hit = 0; for (int i = 0; i < b->nhist; i++) if (g_frame - b->hist[i].f < 400 && abs(b->hist[i].x - c->cx) < 16 && abs(b->hist[i].y - c->cy) < 16 && b->hist[i].code == c->code) { if (b->hist[i].hit) hit++; else miss++; }
       if (miss >= 2 && hit == 0) { w *= 0.03; spot_dead = 1; } else if (miss >= 3 && miss > 2 * hit) w *= 0.1; }                                      /* a spot that keeps missing: nothing there to hit */
@@ -137,7 +139,7 @@ static double weight_of(Nb1Bot *b, const Cand *c) {
     if (b->stage && b->stage->has_sc) {                                          /* the stage's own rules (written from its rule screen) */
         const BScene *sc = &b->stage->sc;
         for (int i = 0; i < sc->na; i++) if (sel_match(&sc->avoid[i], c)) return 0;
-        int pref = 0; for (int i = 0; i < sc->np; i++) if (sel_match(&sc->prefer[i], c)) { if (sc->prefer[i].weight > w || !pref) { w = sc->prefer[i].weight; g_ox = sc->prefer[i].ax; g_oy = sc->prefer[i].ay; } pref = 1; }
+        int pref = 0; for (int i = 0; i < sc->np; i++) if (sel_match(&sc->prefer[i], c)) { if (sc->prefer[i].weight > w || !pref) { w = sc->prefer[i].weight; g_ox = sc->prefer[i].ax; g_oy = sc->prefer[i].ay; g_fx = sc->prefer[i].fx; g_fy = sc->prefer[i].fy; } pref = 1; }
         if (sc->only && !pref) w *= 0.02;
     }
     if (spot_dead && w > 0.2) w = 0.2;                                           /* a preferred target that keeps missing at the same spot (already gone / not hittable there): a stage's prefer weight does not revive it */
@@ -233,7 +235,7 @@ void nb1_bot_step(Nb1Bot *b, const Nb1State *st, const Nb1GameInfo *g, unsigned 
         Cand c = { code, e->color, e->pri, (x0 + x1) / 2, (y0 + y1) / 2, x1 - x0, y1 - y0, 0 };
         if (is_hud_code(code) || c.pri >= 6 || c.w < b->d.min_size || c.h < b->d.min_size || c.w > b->d.max_size || c.h > b->d.max_size || c.cx < 3 || c.cx > 284 || c.cy < 3 || c.cy > 220) continue;
         c.still = 0; for (int q = 0; q < b->nprev; q++) if (b->prev[q].code == c.code && b->prev[q].col == c.col && abs(b->prev[q].cx - c.cx) <= 1 && abs(b->prev[q].cy - c.cy) <= 1) { c.still = b->prev[q].still + (int)dfr; break; }
-        c.wt = weight_of(b, &c); c.ox = g_ox; c.oy = g_oy;
+        c.wt = weight_of(b, &c); c.ox = g_ox; c.oy = g_oy; if (b->stage && b->stage->frac_aim) { c.ox += g_fx * c.w; c.oy += g_fy * c.h; }      /* stage option frac_aim: use the fractional offsets too */
         if (have_boat && c.wt >= 1.0) {      /* a vulture: does it carry a hostage, and where will that hostage land? */
             int hi = -1; for (int q = 0; q < nhost; q++) if (abs(hx[q] - c.cx) < 26 && hy[q] >= c.cy - 12) { hi = q; break; }
             if (hi < 0) c.wt *= 0.05;      /* no hostage under it: shooting it saves nobody */
