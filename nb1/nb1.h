@@ -41,6 +41,8 @@ void nb1_render_composite(const Nb1State *st, const Nb1State *sst, const Nb1Roms
 /* One sprite entry on its own: x0,y0,w,h, rgba[h][w][4], pen[h][w] (-1 empty, -2 shadow). Caller frees. NULL = draws nothing. */
 typedef struct { int x0, y0, w, h; uint8_t *rgba; int32_t *pen; } Nb1Tex;
 int nb1_entry_tex(const Nb1State *st, const Nb1Roms *roms, const Nb1Entry *sp, uint8_t rgb[0x2000][3], Nb1Tex *out);
+/* Per sprite entry: opaque pixels on screen, pixels not drawn over by a later entry, and their centre (arrays of ne <= 256). */
+void nb1_sprite_visibility(const Nb1State *st, const Nb1Roms *roms, const Nb1Entry *ents, int ne, int *total, int *visible, float *vcx, float *vcy);
 /* One tilemap layer, full screen: rgba[224][288][4], pen[224][288] (-1 empty). */
 void nb1_tilemap_tex(const Nb1State *st, const Nb1Roms *roms, int i, uint8_t rgb[0x2000][3], uint8_t *rgba, int32_t *pen);
 
@@ -66,6 +68,7 @@ void nb1_bot_step(Nb1Bot *b, const Nb1State *sprite_state, const Nb1GameInfo *ga
 const char *nb1_bot_status(const Nb1Bot *b);
 void nb1_bot_set_stage(Nb1Bot *b, const char *id);               /* name the stage (e.g. the rule banner's sentence): its own statistics are used and kept; NULL / "" = from the game's stage counters */
 void nb1_bot_set_seed(Nb1Bot *b, unsigned seed);
+void nb1_bot_set_roms(Nb1Bot *b, const Nb1Roms *roms);           /* optional: lets the bot see which parts of a sprite are covered by others (stage options vis_min / aim_visible) */
 void nb1_bot_set_mode(Nb1Bot *b, int mode);                  /* 0 = whatever it likes, 1 training, 2 beginner, 3 expert, 4 very hard: which button to shoot on the mode screen */
 int  nb1_bot_key(const Nb1Bot *b, int i, int *code, int *col, double *n, double *hits, double *pen);   /* what it has learned so far, one sprite type at a time */
 int  nb1_bot_save_stats(const Nb1Bot *b, const char *path);    /* what it learned while playing: [[code, colour, shots, hits, penalties], ...] (the format of the rules file's "keys") */

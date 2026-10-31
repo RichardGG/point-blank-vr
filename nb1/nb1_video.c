@@ -333,3 +333,23 @@ void nb1_render_composite(const Nb1State *st, const Nb1State *sst, const Nb1Roms
     for (int i = 0; i < 6; i++) { free(tpen[i]); free(topq[i]); }
     free(spen); free(spri); free(ents); free(dest);
 }
+
+
+/* How much of each sprite entry is really on screen: sprites are drawn in list order and the last opaque pixel wins (as the arcade's C355 does here), so a later sprite
+ * (sandbags, a mound) hides what is under it.  total[i] = opaque pixels of entry i inside the screen, visible[i] = those that nobody drew over, (vcx, vcy) = their centre. */
+void nb1_sprite_visibility(const Nb1State *st, const Nb1Roms *roms, const Nb1Entry *ents, int ne, int *total, int *visible, float *vcx, float *vcy) {
+    static int16_t who[NB1_H][NB1_W]; static int xi[4096], yi[4096]; static double sx[256], sy[256];
+    memset(who, 0xff, sizeof who);
+    for (int i = 0; i < ne && i < 256; i++) { total[i] = visible[i] = 0; vcx[i] = vcy[i] = 0; sx[i] = sy[i] = 0; }
+    for (int i = 0; i < ne && i < 256; i++) {
+        const Nb1Entry *sp = &ents[i];
+        for (int k = 0; k < sp->ntiles; k++) {
+            const Nb1Tile *t = &sp->tiles[k]; if (t->w <= 0 || t->h <= 0 || !tile_maps(t->w, t->h, sp->flipx, sp->flipy, xi, yi)) continue;
+            const uint8_t *src = spr_tile(st, roms, sp, t->t);
+            for (int yy = 0; yy < t->h; yy++) { int Y = t->y + yy; if (Y < 0 || Y >= NB1_H) continue;
+                for (int xx = 0; xx < t->w; xx++) { int X = t->x + xx; if (X < 0 || X >= NB1_W) continue; if (src[yi[yy] * 16 + xi[xx]] == 0xff) continue; who[Y][X] = (int16_t)i; total[i]++; } }
+        }
+    }
+    for (int Y = 0; Y < NB1_H; Y++) for (int X = 0; X < NB1_W; X++) { int w = who[Y][X]; if (w >= 0) { visible[w]++; sx[w] += X; sy[w] += Y; } }
+    for (int i = 0; i < ne && i < 256; i++) if (visible[i]) { vcx[i] = (float)(sx[i] / visible[i]); vcy[i] = (float)(sy[i] / visible[i]); }
+}

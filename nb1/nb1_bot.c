@@ -14,12 +14,12 @@
 typedef struct { int code_lo, code_hi, col_lo, col_hi, pri_lo, pri_hi; double weight, ax, ay; } BSel;
 typedef struct { char name[64]; int only; BSel *prefer, *avoid; int np, na; } BScene;
 typedef struct { int code, col; double n, hits, pen; } BKey;
-typedef struct { char id[160]; char text[160]; BKey *keys; int nkeys, cap; BScene sc; int has_sc; int *order, norder; int match_sample, multihit, has_lead, has_gap, nearest; double lead, gap; } BStage;       /* what one stage (difficulty, stage counter, card) has taught: its own sprite statistics and the sentence the game shows before it */
+typedef struct { char id[160]; char text[160]; BKey *keys; int nkeys, cap; BScene sc; int has_sc; int *order, norder; int match_sample, multihit, has_lead, has_gap, nearest, aim_visible; double lead, gap, vis_min; } BStage;       /* what one stage (difficulty, stage counter, card) has taught: its own sprite statistics and the sentence the game shows before it */
 typedef struct { int code, col, pri, cx, cy, w, h; double wt; int still; double ox, oy; } Cand;       /* still: frames it has been at the same place (scenery) */
 typedef struct { double min_size, max_size, unknown, speed, gap, hold, lead, fire_min; } BDef;
 
 struct Nb1Bot {
-    BDef d; BScene *sc; int nsc; BKey *keys; int nkeys, capkeys; BScene *cur; BStage *stages; int nstages; BStage *stage; unsigned rng;
+    const Nb1Roms *roms; BDef d; BScene *sc; int nsc; BKey *keys; int nkeys, capkeys; BScene *cur; BStage *stages; int nstages; BStage *stage; unsigned rng;
     double ax, ay;                       /* where the gun points now */
     int have_aim; unsigned last_frame; int trig_left, gap_left;
     int cur_code, cur_col, cur_cx, cur_cy, have_target, target_shots; unsigned target_since;
@@ -74,7 +74,7 @@ Nb1Bot *nb1_bot_new(const char *rules_path) {
             if ((v = json_get(o, "text")) && v->t == J_STR) snprintf(g->text, sizeof g->text, "%s", v->str);
             g->has_sc = 1; g->sc.only = (v = json_get(o, "only")) && v->num != 0; g->sc.np = sel_parse(json_get(o, "prefer"), &g->sc.prefer); g->sc.na = sel_parse(json_get(o, "avoid"), &g->sc.avoid);
             if ((v = json_get(o, "order")) && v->t == J_ARR) { g->norder = v->n; g->order = malloc((size_t)(v->n ? v->n : 1) * sizeof *g->order); for (int q = 0; q < v->n; q++) g->order[q] = (int)v->kid[q]->num; }   /* codes to shoot in this sequence */
-            g->match_sample = (v = json_get(o, "match_sample")) && v->num != 0; g->multihit = (v = json_get(o, "multihit")) && v->num != 0; if ((v = json_get(o, "lead"))) { g->lead = v->num; g->has_lead = 1; } if ((v = json_get(o, "gap"))) { g->gap = v->num; g->has_gap = 1; } g->nearest = (v = json_get(o, "nearest")) && v->num != 0;
+            g->match_sample = (v = json_get(o, "match_sample")) && v->num != 0; g->multihit = (v = json_get(o, "multihit")) && v->num != 0; if ((v = json_get(o, "lead"))) { g->lead = v->num; g->has_lead = 1; } if ((v = json_get(o, "gap"))) { g->gap = v->num; g->has_gap = 1; } g->nearest = (v = json_get(o, "nearest")) && v->num != 0; g->aim_visible = (v = json_get(o, "aim_visible")) && v->num != 0; g->vis_min = (v = json_get(o, "vis_min")) ? v->num : 0;
             const Json *kk = json_get(o, "keys"); if (kk && kk->t == J_ARR) for (int q = 0; q < kk->n; q++) { const Json *r = kk->kid[q]; if (r->t != J_ARR || r->n < 5) continue;
                 BKey *k = keys_get(&g->keys, &g->nkeys, &g->cap, (int)r->kid[0]->num, (int)r->kid[1]->num, 1); k->n = r->kid[2]->num; k->hits = r->kid[3]->num; k->pen = r->kid[4]->num; } } }
     const Json *sc = json_get(j, "scenes");
@@ -92,6 +92,7 @@ void nb1_bot_set_scene(Nb1Bot *b, const char *name) {
 }
 const char *nb1_bot_status(const Nb1Bot *b) { return b->status; }
 void nb1_bot_set_mode(Nb1Bot *b, int mode) { b->want_mode = mode; }
+void nb1_bot_set_roms(Nb1Bot *b, const Nb1Roms *roms) { b->roms = roms; }
 void nb1_bot_set_stage(Nb1Bot *b, const char *id) { snprintf(b->stage_override, sizeof b->stage_override, "%s", id ? id : ""); }
 void nb1_bot_set_seed(Nb1Bot *b, unsigned seed) { b->rng = seed * 2654435761u + 1; }
 int nb1_bot_key(const Nb1Bot *b, int i, int *code, int *col, double *n, double *hits, double *pen) {
@@ -182,6 +183,8 @@ void nb1_bot_step(Nb1Bot *b, const Nb1State *st, const Nb1GameInfo *g, unsigned 
         if (x0 >= 114 && x0 <= 128 && y0 >= 2 && y0 <= 14 && x1 - x0 >= 42 && x1 - x0 <= 54 && y1 - y0 >= 42 && y1 - y0 <= 54 && code != 14483 && code != 14471) { g_sample_code = code; g_sample_keep = code; g_sample_f = frame; } }
     if (b->stage && b->stage->match_sample && g_sample_code < 0 && g_sample_keep >= 0 && frame - g_sample_f < 150) g_sample_code = g_sample_keep;      /* the sample sprite is missing on some frames (it animates / changes between rounds): keep the last one for a couple of seconds */
     unsigned dfr = b->have_aim && frame > b->last_frame ? frame - b->last_frame : 2; if (dfr > 30) dfr = 30; b->last_frame = frame;
+    static int v_tot[256], v_vis[256]; static float v_cx[256], v_cy[256]; int have_vis = 0;
+    if (b->roms && b->stage && (b->stage->vis_min > 0 || b->stage->aim_visible)) { nb1_sprite_visibility(st, b->roms, ents, ne, v_tot, v_vis, v_cx, v_cy); have_vis = 1; }      /* which parts of each sprite are not covered by a later sprite */
     /* "type the same 3-letter word": the word is three dotted 2x2-tile letter sprites near the top (tile numbers 3651..3738, alphabetical: A 3651 ... Y 3734; typed letters turn solid = tile - 96);
        shoot the matching key of the on-screen keyboard, in any order (a wrong key costs nothing).  Letter table and key positions: research repo game/stages/type-the-word/letters.json. */
     {
@@ -212,7 +215,13 @@ void nb1_bot_step(Nb1Bot *b, const Nb1State *st, const Nb1GameInfo *g, unsigned 
         Cand c = { code, e->color, e->pri, (x0 + x1) / 2, (y0 + y1) / 2, x1 - x0, y1 - y0, 0 };
         if (is_hud_code(code) || c.pri >= 6 || c.w < b->d.min_size || c.h < b->d.min_size || c.w > b->d.max_size || c.h > b->d.max_size || c.cx < 3 || c.cx > 284 || c.cy < 3 || c.cy > 220) continue;
         c.still = 0; for (int q = 0; q < b->nprev; q++) if (b->prev[q].code == c.code && b->prev[q].col == c.col && abs(b->prev[q].cx - c.cx) <= 1 && abs(b->prev[q].cy - c.cy) <= 1) { c.still = b->prev[q].still + (int)dfr; break; }
-        c.wt = weight_of(b, &c); c.ox = g_ox; c.oy = g_oy; if (c.wt > 0) cs[nc++] = c;
+        c.wt = weight_of(b, &c); c.ox = g_ox; c.oy = g_oy;
+        if (have_vis && i < 256 && v_tot[i] >= 20) {
+            double frac = (double)v_vis[i] / v_tot[i];
+            if (b->stage->vis_min > 0 && frac < b->stage->vis_min && c.wt >= 1.0) c.wt *= 0.05;      /* a target (preferred sprite) mostly hidden behind other sprites: wait until it shows (a shot there hits the cover) */
+            if (b->stage->aim_visible && v_vis[i] >= 10) { c.cx = (int)(v_cx[i] + 0.5f); c.cy = (int)(v_cy[i] + 0.5f); }      /* aim at the part that can be seen */
+        }
+        if (c.wt > 0) cs[nc++] = c;
     }
     if (getenv("NB1_BOT_DEBUG") && (frame / 2) % 30 == 0) { fprintf(stderr, "bot f%u stage '%s' aim %.0f,%.0f sample %d cands:", frame, b->stage ? b->stage->text[0] ? b->stage->text : b->stage->id : "-", b->ax, b->ay, g_sample_code); for (int i = 0; i < nc; i++) fprintf(stderr, " [%d:%d p%d %dx%d @%d,%d w%.2f]", cs[i].code, cs[i].col, cs[i].pri, cs[i].w, cs[i].h, cs[i].cx, cs[i].cy, cs[i].wt); fprintf(stderr, "\n"); }
     /* learning: every shot waits (up to 45 frames) for the game's verdict: the score word rising (a hit) or a life lost (a penalty). A rise is credited to one shot only. */
