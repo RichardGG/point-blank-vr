@@ -14,8 +14,8 @@
 typedef struct { int code_lo, code_hi, col_lo, col_hi, pri_lo, pri_hi; double weight, ax, ay; } BSel;
 typedef struct { char name[64]; int only; BSel *prefer, *avoid; int np, na; } BScene;
 typedef struct { int code, col; double n, hits, pen; } BKey;
-typedef struct { char id[160]; char text[160]; BKey *keys; int nkeys, cap; BScene sc; int has_sc; int *order, norder; int match_sample, multihit, has_lead, has_gap, nearest, aim_visible; double lead, gap, vis_min, aim_frac, vis_min_big; } BStage;       /* what one stage (difficulty, stage counter, card) has taught: its own sprite statistics and the sentence the game shows before it */
-typedef struct { int code, col, pri, cx, cy, w, h; double wt; int still; double ox, oy; } Cand;       /* still: frames it has been at the same place (scenery) */
+typedef struct { char id[160]; char text[160]; BKey *keys; int nkeys, cap; BScene sc; int has_sc; int *order, norder; int match_sample, multihit, has_lead, has_gap, nearest, aim_visible, nboat, boat[8], hlo, hhi; double lead, gap, vis_min, aim_frac, vis_min_big, boat_min, boat_max, boat_sigma, drop_speed, boat_y, boat_speed; } BStage;       /* what one stage (difficulty, stage counter, card) has taught: its own sprite statistics and the sentence the game shows before it */
+typedef struct { int code, col, pri, cx, cy, w, h; double wt; int still; double ox, oy, pbp, phx, pT, pbv; } Cand;       /* still: frames it has been at the same place (scenery) */
 typedef struct { double min_size, max_size, unknown, speed, gap, hold, lead, fire_min; } BDef;
 
 struct Nb1Bot {
@@ -75,6 +75,8 @@ Nb1Bot *nb1_bot_new(const char *rules_path) {
             g->has_sc = 1; g->sc.only = (v = json_get(o, "only")) && v->num != 0; g->sc.np = sel_parse(json_get(o, "prefer"), &g->sc.prefer); g->sc.na = sel_parse(json_get(o, "avoid"), &g->sc.avoid);
             if ((v = json_get(o, "order")) && v->t == J_ARR) { g->norder = v->n; g->order = malloc((size_t)(v->n ? v->n : 1) * sizeof *g->order); for (int q = 0; q < v->n; q++) g->order[q] = (int)v->kid[q]->num; }   /* codes to shoot in this sequence */
             g->match_sample = (v = json_get(o, "match_sample")) && v->num != 0; g->multihit = (v = json_get(o, "multihit")) && v->num != 0; if ((v = json_get(o, "lead"))) { g->lead = v->num; g->has_lead = 1; } if ((v = json_get(o, "gap"))) { g->gap = v->num; g->has_gap = 1; } g->nearest = (v = json_get(o, "nearest")) && v->num != 0; g->aim_visible = (v = json_get(o, "aim_visible")) && v->num != 0; g->vis_min = (v = json_get(o, "vis_min")) ? v->num : 0; g->vis_min_big = (v = json_get(o, "vis_min_big")) ? v->num : -1; g->aim_frac = (v = json_get(o, "aim_frac")) ? v->num : -1;
+            if ((v = json_get(o, "boat")) && v->t == J_ARR) { g->nboat = v->n < 8 ? v->n : 8; for (int q = 0; q < g->nboat; q++) g->boat[q] = (int)v->kid[q]->num; }      /* hostage stages: sprite codes of the player's boat (96x32), the code range of the hostages, where the boat can be, how fast a hostage falls */
+            g->hlo = (v = json_get(o, "hostage_lo")) ? (int)v->num : 0; g->hhi = (v = json_get(o, "hostage_hi")) ? (int)v->num : 0; g->boat_min = (v = json_get(o, "boat_min")) ? v->num : 70; g->boat_max = (v = json_get(o, "boat_max")) ? v->num : 255; g->boat_sigma = (v = json_get(o, "boat_sigma")) ? v->num : 22; g->drop_speed = (v = json_get(o, "drop_speed")) ? v->num : 3.5; g->boat_y = (v = json_get(o, "boat_y")) ? v->num : 150; g->boat_speed = (v = json_get(o, "boat_speed")) ? v->num : 1.75;
             const Json *kk = json_get(o, "keys"); if (kk && kk->t == J_ARR) for (int q = 0; q < kk->n; q++) { const Json *r = kk->kid[q]; if (r->t != J_ARR || r->n < 5) continue;
                 BKey *k = keys_get(&g->keys, &g->nkeys, &g->cap, (int)r->kid[0]->num, (int)r->kid[1]->num, 1); k->n = r->kid[2]->num; k->hits = r->kid[3]->num; k->pen = r->kid[4]->num; } } }
     const Json *sc = json_get(j, "scenes");
@@ -186,6 +188,20 @@ void nb1_bot_step(Nb1Bot *b, const Nb1State *st, const Nb1GameInfo *g, unsigned 
     unsigned dfr = b->have_aim && frame > b->last_frame ? frame - b->last_frame : 2; if (dfr > 30) dfr = 30; b->last_frame = frame;
     static int v_tot[256], v_vis[256]; static float v_cx[256], v_cy[256]; int have_vis = 0;
     if (b->roms && b->stage && (b->stage->vis_min > 0 || b->stage->aim_visible || b->stage->aim_frac >= 0)) { nb1_sprite_visibility(st, b->roms, ents, ne, v_tot, v_vis, v_cx, v_cy); have_vis = 1; }      /* which parts of each sprite are not covered by a later sprite */
+    /* hostage stages ("catch N hostages in the boat of your colour"): the boat moves back and forth along the water; a vulture is worth shooting only while it carries a hostage and the hostage, falling straight down, will reach the water where the boat will be */
+    int have_boat = 0; double boat_cx = 0, boat_v = 0; static double boat_last_cx = -1; static unsigned boat_last_f = 0; int nhost = 0; static int hx[32], hy[32];
+    if (b->stage && b->stage->nboat) {
+        for (int i = 0; i < ne; i++) { const Nb1Entry *e = &ents[i]; if (!e->ntiles) continue; int t0 = e->tiles[0].t, code = (((t0 & 0x7ff) | (st->bank[(t0 >> 11) & 7] << 11)) + e->offset) & 0x7fff;
+            int x0 = e->tiles[0].x, y0 = e->tiles[0].y, x1 = x0, y1 = y0; for (int k = 0; k < e->ntiles; k++) { const Nb1Tile *t = &e->tiles[k]; if (t->x < x0) x0 = t->x; if (t->y < y0) y0 = t->y; if (t->x + t->w > x1) x1 = t->x + t->w; if (t->y + t->h > y1) y1 = t->y + t->h; }
+            for (int q = 0; q < b->stage->nboat; q++) if (code == b->stage->boat[q] && y0 > 120) { have_boat = 1; boat_cx = (x0 + x1) / 2.0; }
+            if (b->stage->hhi && code >= b->stage->hlo && code <= b->stage->hhi && x1 - x0 >= 40 && x1 - x0 <= 56 && y1 - y0 >= 56 && nhost < 32) { hx[nhost] = (x0 + x1) / 2; hy[nhost++] = y1; } }      /* hy = the bottom of the hostage */
+        if (have_boat) {      /* the boat moves at a constant speed and turns at the two ends: only its direction has to be seen (over about 10 frames, the positions are whole pixels) */
+            static double hist_cx[8]; static unsigned hist_f[8]; static int hn; static double dir = 1;
+            if (hn > 0 && frame - hist_f[(hn - 1) & 7] > 60) hn = 0;
+            hist_cx[hn & 7] = boat_cx; hist_f[hn & 7] = frame; hn++;
+            for (int q = 2; q < 8 && q < hn; q++) { int i0 = (hn - 1 - q) & 7; if (frame - hist_f[i0] >= 8) { double dd = boat_cx - hist_cx[i0]; if (dd > 3) dir = 1; else if (dd < -3) dir = -1; break; } }
+            boat_v = dir * b->stage->boat_speed; boat_last_cx = boat_cx; boat_last_f = frame; }
+    }
     /* "type the same 3-letter word": the word is three dotted 2x2-tile letter sprites near the top (tile numbers 3651..3738, alphabetical: A 3651 ... Y 3734; typed letters turn solid = tile - 96);
        shoot the matching key of the on-screen keyboard, in any order (a wrong key costs nothing).  Letter table and key positions: research repo game/stages/type-the-word/letters.json. */
     {
@@ -217,6 +233,13 @@ void nb1_bot_step(Nb1Bot *b, const Nb1State *st, const Nb1GameInfo *g, unsigned 
         if (is_hud_code(code) || c.pri >= 6 || c.w < b->d.min_size || c.h < b->d.min_size || c.w > b->d.max_size || c.h > b->d.max_size || c.cx < 3 || c.cx > 284 || c.cy < 3 || c.cy > 220) continue;
         c.still = 0; for (int q = 0; q < b->nprev; q++) if (b->prev[q].code == c.code && b->prev[q].col == c.col && abs(b->prev[q].cx - c.cx) <= 1 && abs(b->prev[q].cy - c.cy) <= 1) { c.still = b->prev[q].still + (int)dfr; break; }
         c.wt = weight_of(b, &c); c.ox = g_ox; c.oy = g_oy;
+        if (have_boat && c.wt >= 1.0) {      /* a vulture: does it carry a hostage, and where will that hostage land? */
+            int hi = -1; for (int q = 0; q < nhost; q++) if (abs(hx[q] - c.cx) < 26 && hy[q] >= c.cy - 12) { hi = q; break; }
+            if (hi < 0) c.wt *= 0.05;      /* no hostage under it: shooting it saves nobody */
+            else { double T = (b->stage->boat_y - hy[hi]) / b->stage->drop_speed; if (T < 6) T = 6; T += 4; double bp = boat_cx + boat_v * T, lo = b->stage->boat_min, hi2 = b->stage->boat_max;
+                   for (int r = 0; r < 4 && (bp < lo || bp > hi2); r++) { if (bp < lo) bp = 2 * lo - bp; if (bp > hi2) bp = 2 * hi2 - bp; }      /* the boat turns round at the ends */
+                   double dx2 = (hx[hi] - bp) / b->stage->boat_sigma; c.wt *= exp(-dx2 * dx2); c.pbp = bp; c.phx = hx[hi]; c.pT = T; c.pbv = boat_v; }
+        }
         if (have_vis && i < 256 && v_tot[i] >= 20) {
             double frac = (double)v_vis[i] / v_tot[i];
             double vmin = b->stage->vis_min; if (b->stage->vis_min_big >= 0 && (c.w >= 45 || c.h >= 45)) vmin = b->stage->vis_min_big;      /* big (near) targets may be covered more: they are the ones that matter */
@@ -297,7 +320,7 @@ void nb1_bot_step(Nb1Bot *b, const Nb1State *st, const Nb1GameInfo *g, unsigned 
         double ex = tx - b->ax, ey = ty - b->ay;
         if (b->trig_left > 0) { b->trig_left -= (int)dfr; }
         else if (b->gap_left > 0) { b->gap_left -= (int)dfr; }
-        else if (ex * ex + ey * ey < (pick->w <= 18 && pick->h <= 18 ? 1.5 * 1.5 : 5.0 * 5.0) && st && pick->wt >= b->d.fire_min && !pick_supp) { b->trig_left = (int)b->d.hold; b->freeze_until = frame + (getenv("NB1_BOT_FREEZE") ? (unsigned)atoi(getenv("NB1_BOT_FREEZE")) : 5); b->gap_left = (int)(b->stage && b->stage->has_gap ? b->stage->gap : b->d.gap); b->shot_code = pick->code; b->shot_col = pick->col; b->shot_frame = frame; if (b->stage && b->stage->norder) { int idx = -1; for (int q = 0; q < b->stage->norder; q++) if (b->stage->order[q] == pick->code) idx = q; if (idx >= 0 && idx != g_true_min && g_nlock < 32) { g_lock_code[g_nlock] = pick->code; g_lock_until[g_nlock++] = frame + 250; if (getenv("NB1_BOT_DEBUG")) fprintf(stderr, "lock number %d until f%u\n", idx + 1, frame + 250); } } if (b->nq < 8) { b->q[b->nq].f = frame; b->q[b->nq].code = pick->code; b->q[b->nq].col = pick->col; b->q[b->nq].x = pick->cx; b->q[b->nq].y = pick->cy; b->q[b->nq].vx = vx; b->q[b->nq].vy = vy; b->q[b->nq].err = sqrt(ex * ex + ey * ey); b->q[b->nq].sscore = g && g->valid ? g->score : 1 << 30; b->q[b->nq].slives = g && g->valid ? g->lives : 0;      /* no game numbers yet: this shot can be judged neither a hit nor a penalty */ b->q[b->nq].done = 0; b->nq++; } for (int q = 7; q > 0; q--) b->rs[q] = b->rs[q - 1]; b->rs[0].x = pick->cx; b->rs[0].y = pick->cy; b->rs[0].f = frame; if (b->nrs < 8) b->nrs++; b->shot_pending = 1; b->target_shots++; b->nshots++;
+        else if (ex * ex + ey * ey < (pick->w <= 18 && pick->h <= 18 ? 1.5 * 1.5 : 5.0 * 5.0) && st && pick->wt >= b->d.fire_min && !pick_supp) { b->trig_left = (int)b->d.hold; b->freeze_until = frame + (getenv("NB1_BOT_FREEZE") ? (unsigned)atoi(getenv("NB1_BOT_FREEZE")) : 5); b->gap_left = (int)(b->stage && b->stage->has_gap ? b->stage->gap : b->d.gap); b->shot_code = pick->code; b->shot_col = pick->col; b->shot_frame = frame; if (getenv("NB1_BOT_DEBUG") && pick->pT > 0) fprintf(stderr, "vshot f%u hostage_x %.0f predicted_boat_x %.0f T %.0f boat_now %.0f v %.2f wt %.2f\n", frame, pick->phx, pick->pbp, pick->pT, boat_cx, pick->pbv, pick->wt); if (b->stage && b->stage->norder) { int idx = -1; for (int q = 0; q < b->stage->norder; q++) if (b->stage->order[q] == pick->code) idx = q; if (idx >= 0 && idx != g_true_min && g_nlock < 32) { g_lock_code[g_nlock] = pick->code; g_lock_until[g_nlock++] = frame + 250; if (getenv("NB1_BOT_DEBUG")) fprintf(stderr, "lock number %d until f%u\n", idx + 1, frame + 250); } } if (b->nq < 8) { b->q[b->nq].f = frame; b->q[b->nq].code = pick->code; b->q[b->nq].col = pick->col; b->q[b->nq].x = pick->cx; b->q[b->nq].y = pick->cy; b->q[b->nq].vx = vx; b->q[b->nq].vy = vy; b->q[b->nq].err = sqrt(ex * ex + ey * ey); b->q[b->nq].sscore = g && g->valid ? g->score : 1 << 30; b->q[b->nq].slives = g && g->valid ? g->lives : 0;      /* no game numbers yet: this shot can be judged neither a hit nor a penalty */ b->q[b->nq].done = 0; b->nq++; } for (int q = 7; q > 0; q--) b->rs[q] = b->rs[q - 1]; b->rs[0].x = pick->cx; b->rs[0].y = pick->cy; b->rs[0].f = frame; if (b->nrs < 8) b->nrs++; b->shot_pending = 1; b->target_shots++; b->nshots++;
                                                          if (g && g->valid) { b->last_score = g->score; b->last_lives = g->lives; b->shot_score = g->score; b->shot_lives = g->lives; } }
         snprintf(b->status, sizeof b->status, "auto: target code %d col %d (w %.2f)  shots %u hits %u penalties %u", pick->code, pick->col, pick->wt, b->nshots, b->nhits, b->npen);
     } else {
