@@ -128,7 +128,7 @@ static double weight_of(Nb1Bot *b, const Cand *c) {
     if (k && k->pen >= 1 && k->pen >= k->hits) return 0;
     if (!k && gn >= 3 && gp >= 2 && gp >= gh) return 0;
     int spot_dead = 0;
-    { int miss = 0, hit = 0; for (int i = 0; i < b->nhist; i++) if (g_frame - b->hist[i].f < 400 && abs(b->hist[i].x - c->cx) < 16 && abs(b->hist[i].y - c->cy) < 16 && b->hist[i].code == c->code) { if (b->hist[i].hit) hit++; else miss++; }
+    if (!(b->stage && b->stage->nearest)) { int miss = 0, hit = 0; for (int i = 0; i < b->nhist; i++) if (g_frame - b->hist[i].f < 400 && abs(b->hist[i].x - c->cx) < 16 && abs(b->hist[i].y - c->cy) < 16 && b->hist[i].code == c->code) { if (b->hist[i].hit) hit++; else miss++; }
       if (miss >= 2 && hit == 0) { w *= 0.03; spot_dead = 1; } else if (miss >= 3 && miss > 2 * hit) w *= 0.1; }                                      /* a spot that keeps missing: nothing there to hit */
     if (c->still > 45 && !proven) w *= 0.12;                                          /* scenery: it has not moved for a while and nothing says shooting it scores */                          /* shooting it cost a life more often than it scored */
     if (b->stage && b->stage->has_sc) {                                          /* the stage's own rules (written from its rule screen) */
@@ -253,7 +253,7 @@ void nb1_bot_step(Nb1Bot *b, const Nb1State *st, const Nb1GameInfo *g, unsigned 
     }
     { int w = 0; for (int i = 0; i < b->nq; i++) if (!b->q[i].done) b->q[w++] = b->q[i]; b->nq = w; }
     b->last_hit_visible = hit_visible; if (g && g->valid) { b->last_score = g->score; b->last_lives = g->lives; }
-    for (int i = 0; i < nc; i++) {                                                /* one target drawn as several sprite entries (head and body): merge entries that touch */
+    for (int i = 0; i < nc && !(b->stage && b->stage->nearest); i++) {                                                /* one target drawn as several sprite entries (head and body): merge entries that touch.  Not in 'nearest' stages: crowds of touching tanks were merged into one blob and the bot aimed at the empty ground between them */
         if (cs[i].wt < 0.25) continue;
         for (int j = i + 1; j < nc; j++) { if (cs[j].wt < 0.25) continue;
             if (cs[j].code == cs[i].code && cs[j].col == cs[i].col) continue;                 /* the same sprite twice side by side is two targets (a pattern of small targets), not one target drawn in pieces */
@@ -274,10 +274,11 @@ void nb1_bot_step(Nb1Bot *b, const Nb1State *st, const Nb1GameInfo *g, unsigned 
     Cand *pick = NULL; double best = -1; int pick_supp = 0;
     for (int i = 0; i < nc; i++) {
         Cand *c = &cs[i]; double dx = c->cx - b->ax, dy = c->cy - b->ay, dist = sqrt(dx * dx + dy * dy), s = c->wt / (1.0 + dist / 90.0); int supp = 0;
-        if (b->stage && b->stage->nearest) { double sz = (c->h > c->w ? c->h : c->w) / 20.0; s = c->wt * sz * sz * sz / (1.0 + dist / 400.0); }      /* the nearest threat first (tanks: bigger = nearer); distance from the crosshair hardly matters */
-        if (b->have_target && c->code == b->cur_code && c->col == b->cur_col && abs(c->cx - b->cur_cx) < 40 && abs(c->cy - b->cur_cy) < 40) s *= (b->target_shots >= 3 && !(b->stage && b->stage->multihit) ? 0.1 : 2.5);
+        if (b->stage && b->stage->nearest && c->wt >= 1.0) { double sz = (c->h > c->w ? c->h : c->w) / 20.0; s = c->wt * sz * sz * sz / (1.0 + dist / 400.0); }      /* only the stage's targets get the size boost: a big cloud of smoke must not outrank a small tank */      /* the nearest threat first (tanks: bigger = nearer); distance from the crosshair hardly matters */
+        if (b->have_target && c->code == b->cur_code && c->col == b->cur_col && abs(c->cx - b->cur_cx) < 40 && abs(c->cy - b->cur_cy) < 40) s *= (b->stage && b->stage->nearest ? 1.15 : (b->target_shots >= 3 && !(b->stage && b->stage->multihit) ? 0.1 : 2.5));      /* 'nearest' stages: hardly any stickiness, a bigger (nearer) target always wins */
         if (!(b->stage && b->stage->multihit)) for (int q = 0; q < b->nrs; q++) if (frame - b->rs[q].f < 50 && abs(c->cx - b->rs[q].x) < 26 && abs(c->cy - b->rs[q].y) < 26) { s *= 0.04; supp = 1; break; }      /* just shot there: it is falling or gone */
-        { unsigned h = (b->rng ^ (unsigned)(c->code * 40503 + c->col * 977)) * 2654435761u; h ^= h >> 15; h *= 2246822519u; s *= 0.75 + 0.5 * ((h >> 8) & 0xff) / 255.0; }     /* a fixed per-run factor for each sprite type, so runs differ (which stage card they pick) but a pick never flips back and forth */
+        if (!(b->stage && b->stage->nearest)) { unsigned h = (b->rng ^ (unsigned)(c->code * 40503 + c->col * 977)) * 2654435761u; h ^= h >> 15; h *= 2246822519u; s *= 0.75 + 0.5 * ((h >> 8) & 0xff) / 255.0; }     /* a fixed per-run factor for each sprite type, so runs differ (which stage card they pick) but a pick never flips back and forth */
+        if (getenv("NB1_BOT_DEBUG2") && (frame / 2) % 30 == 0) fprintf(stderr, "  cand f%u %d:%d %dx%d @%d,%d wt %.2f score %.2f%s\n", frame, c->code, c->col, c->w, c->h, c->cx, c->cy, c->wt, s, b->stage && b->stage->nearest ? " nearest" : " (stage has no nearest)");
         if (s > best) { best = s; pick = c; pick_supp = supp; }
     }
     if (pick) {
