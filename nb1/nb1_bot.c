@@ -92,6 +92,7 @@ void nb1_bot_set_scene(Nb1Bot *b, const char *name) {
 }
 const char *nb1_bot_status(const Nb1Bot *b) { return b->status; }
 void nb1_bot_set_mode(Nb1Bot *b, int mode) { b->want_mode = mode; }
+int nb1_bot_cur_target(const Nb1Bot *b, int *code, int *cx, int *cy) { if (!b->have_target) return 0; *code = b->cur_code; *cx = b->cur_cx; *cy = b->cur_cy; return 1; }
 void nb1_bot_set_roms(Nb1Bot *b, const Nb1Roms *roms) { b->roms = roms; }
 void nb1_bot_set_stage(Nb1Bot *b, const char *id) { snprintf(b->stage_override, sizeof b->stage_override, "%s", id ? id : ""); }
 void nb1_bot_set_seed(Nb1Bot *b, unsigned seed) { b->rng = seed * 2654435761u + 1; }
@@ -286,7 +287,7 @@ void nb1_bot_step(Nb1Bot *b, const Nb1State *st, const Nb1GameInfo *g, unsigned 
         { int bi = -1; double bd = 1e9;      /* the same target one update ago: the nearest candidate of the same code (or, for a target that changes sprite frame as it moves, a similar-sized one of another code), not just the first one close by */
           for (int i = 0; i < b->nprev; i++) { double ddx = b->prev[i].cx - pick->cx, ddy = b->prev[i].cy - pick->cy, d = sqrt(ddx * ddx + ddy * ddy); if (d >= 35) continue;
               int same = b->prev[i].code == pick->code; double ra = (double)b->prev[i].w / (pick->w ? pick->w : 1); if (!same && (ra < 0.6 || ra > 1.7)) continue; d += same ? 0 : 12; if (d < bd) { bd = d; bi = i; } }
-          if (bi >= 0) { vx = (pick->cx - b->prev[bi].cx) / (double)dfr; vy = (pick->cy - b->prev[bi].cy) / (double)dfr; } }
+          if (bi >= 0) { vx = (pick->cx - b->prev[bi].cx) / (double)dfr; vy = (pick->cy - b->prev[bi].cy) / (double)dfr; double sp = sqrt(vx * vx + vy * vy); if (sp > 7.0) { vx *= 7.0 / sp; vy *= 7.0 / sp; } } }      /* a speed above 7 px/frame is a wrong match (another tank), not a tank: cap it, or the lead throws the shot far off */
         double ld = b->stage && b->stage->has_lead ? b->stage->lead : b->d.lead;      /* a stage can set its own lead (fast flyers such as clay targets need less) */
         double tx = pick->cx + pick->ox + vx * ld, ty = pick->cy + pick->oy + vy * ld;
         if (!b->have_aim) { b->ax = tx; b->ay = ty; b->have_aim = 1; }

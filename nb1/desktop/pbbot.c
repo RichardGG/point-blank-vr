@@ -4,6 +4,7 @@
  * Without pbbot, pbvr and pbdesk have the same player built in (--auto). */
 #include "../nb1.h"
 #include <stdio.h>
+#include <zlib.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -55,11 +56,11 @@ static void read_cards(const Nb1State *st, const Nb1Entry *pe, int n, char key[4
         qsort(codes, (size_t)nc, sizeof(int), cmp_int); unsigned h = 2166136261u; for (int k = 0; k < nc; k++) h = (h ^ (unsigned)codes[k]) * 16777619u; snprintf(key[q], 16, nc ? "%08x" : "-", h); }
 }
 int main(int argc, char **argv) {
-    int once = 0; const char *movie_dir = NULL; int movie_every = 20; const char *state_dir = NULL; const char *flow_dir = NULL, *flow_log = NULL, *unk_dir = NULL; unsigned seed = 1; const char *cards_file = NULL, *want_text = NULL, *scene_dir = NULL; int skip_intro = getenv("NB1_SKIP_INTRO") != NULL; const char *stage_log = NULL, *capdir = NULL; int want_mode = 0; const char *ipc = NULL, *rules = NULL, *tables = NULL, *roms_dir = NULL, *stats = NULL; double seconds = 0;
+    int once = 0; const char *movie_dir = NULL; int movie_every = 20; const char *state_dir = NULL, *trace_dir = NULL; FILE *trace_f = NULL; const char *flow_dir = NULL, *flow_log = NULL, *unk_dir = NULL; unsigned seed = 1; const char *cards_file = NULL, *want_text = NULL, *scene_dir = NULL; int skip_intro = getenv("NB1_SKIP_INTRO") != NULL; const char *stage_log = NULL, *capdir = NULL; int want_mode = 0; const char *ipc = NULL, *rules = NULL, *tables = NULL, *roms_dir = NULL, *stats = NULL; double seconds = 0;
     for (int i = 1; i < argc; i++) { const char *a = argv[i], *v = i + 1 < argc ? argv[i + 1] : NULL;
         if (!strcmp(a, "--ipc") && v) { ipc = v; i++; } else if (!strcmp(a, "--rules") && v) { rules = v; i++; } else if (!strcmp(a, "--tables") && v) { tables = v; i++; }
         else if (!strcmp(a, "--roms") && v) { roms_dir = v; i++; } else if (!strcmp(a, "--stats-out") && v) { stats = v; i++; } else if (!strcmp(a, "--seconds") && v) { seconds = atof(v); i++; }
-        else if (!strcmp(a, "--once")) once = 1; else if (!strcmp(a, "--movie") && v) { movie_dir = v; i++; if (i + 1 < argc && argv[i + 1][0] != '-') movie_every = atoi(argv[++i]); } else if (!strcmp(a, "--save-states") && v) { state_dir = v; i++; } else if (!strcmp(a, "--flow") && v) { flow_dir = v; i++; } else if (!strcmp(a, "--flow-log") && v) { flow_log = v; i++; } else if (!strcmp(a, "--unknown-dir") && v) { unk_dir = v; i++; } else if (!strcmp(a, "--seed") && v) { seed = (unsigned)atoi(v); i++; } else if (!strcmp(a, "--stage-log") && v) { stage_log = v; i++; } else if (!strcmp(a, "--capture") && v) { capdir = v; i++; }
+        else if (!strcmp(a, "--once")) once = 1; else if (!strcmp(a, "--movie") && v) { movie_dir = v; i++; if (i + 1 < argc && argv[i + 1][0] != '-') movie_every = atoi(argv[++i]); } else if (!strcmp(a, "--save-states") && v) { state_dir = v; i++; } else if (!strcmp(a, "--trace") && v) { trace_dir = v; i++; } else if (!strcmp(a, "--flow") && v) { flow_dir = v; i++; } else if (!strcmp(a, "--flow-log") && v) { flow_log = v; i++; } else if (!strcmp(a, "--unknown-dir") && v) { unk_dir = v; i++; } else if (!strcmp(a, "--seed") && v) { seed = (unsigned)atoi(v); i++; } else if (!strcmp(a, "--stage-log") && v) { stage_log = v; i++; } else if (!strcmp(a, "--capture") && v) { capdir = v; i++; }
         else if (!strcmp(a, "--skip-intro")) skip_intro = 1; else if (!strcmp(a, "--scene-dir") && v) { scene_dir = v; i++; } else if (!strcmp(a, "--cards") && v) { cards_file = v; i++; } else if (!strcmp(a, "--want") && v) { want_text = v; i++; }
         else if (!strcmp(a, "--mode") && v) { want_mode = !strcmp(v, "training") ? 1 : !strcmp(v, "beginner") ? 2 : !strcmp(v, "expert") ? 3 : !strcmp(v, "veryhard") ? 4 : 0; i++; } }
     if (!ipc) { fprintf(stderr, "usage: pbbot --ipc DIR [--rules bot_rules.json] [--tables scene_tables.json --roms DIR] [--stats-out FILE] [--seconds N] [--cards FILE] [--want SENTENCE]\n"); return 2; }
@@ -149,6 +150,10 @@ int main(int argc, char **argv) {
             uint8_t *rgb = malloc(NB1_W * NB1_H * 3); nb1_render_composite(st, st, &roms, rgb); char pp[1200]; snprintf(pp, sizeof pp, "%s/d%d_n%d_c%d_%02d.ppm", capdir, cur_diff, cur_stage, cur_card, cap_n);
             FILE *pf = fopen(pp, "wb"); if (pf) { fprintf(pf, "P6\n%d %d\n255\n", NB1_W, NB1_H); fwrite(rgb, 1, NB1_W * NB1_H * 3, pf); fclose(pf); } free(rgb); cap_n++; }
         nb1_bot_step(bot, st, &gi, fr, &sx, &sy, &trig, &coin, &start); if (card_wait) trig = 0;
+        if (trace_dir) {        /* every update: the raw state (zlib) and what the bot did, to review a run offline */
+            if (!trace_f) { char tp[1400]; snprintf(tp, sizeof tp, "%s/trace.tsv", trace_dir); trace_f = fopen(tp, "w"); if (trace_f) fprintf(trace_f, "frame\tsx\tsy\ttrig\thastarget\tcode\tcx\tcy\tlives\tscore\n"); }
+            static unsigned char zbuf[NB1_STATE_FILE_BYTES + 1024]; uLongf zn = sizeof zbuf; if (compress2(zbuf, &zn, pbs_bytes, NB1_STATE_FILE_BYTES, 1) == Z_OK) { char zp[1400]; snprintf(zp, sizeof zp, "%s/s_%07u.z", trace_dir, fr); FILE *zf = fopen(zp, "wb"); if (zf) { fwrite(zbuf, 1, zn, zf); fclose(zf); } }
+            int tc = 0, tx = 0, ty = 0, ht = nb1_bot_cur_target(bot, &tc, &tx, &ty); if (trace_f) { fprintf(trace_f, "%u\t%.1f\t%.1f\t%d\t%d\t%d\t%d\t%d\t%d\t%d\n", fr, sx, sy, trig, ht, tc, tx, ty, gi.valid ? gi.lives : -1, gi.valid ? gi.score : -1); fflush(trace_f); } }
         if (skip_intro && flow) {          /* "PUSH BUTTON TO SKIP": Start skips the rules page, a second press the bullets / time-limit page, and the stage begins (lab and test runs only: captures want the whole rules screen) */
             int ph = nb1_flow_phase(flow); if (ph != intro_prev) { intro_prev = ph; intro_enter = fr; skip_n = 0; skip_last = 0; }
             if (ph == NB1_FLOW_INTRO && nb1_flow_type(flow) >= 0) {        /* wait until the flow tracker has read the sentence, then press twice, a second apart */
