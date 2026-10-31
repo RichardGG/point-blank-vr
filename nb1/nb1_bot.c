@@ -23,7 +23,7 @@ struct Nb1Bot {
     double ax, ay;                       /* where the gun points now */
     int have_aim; unsigned last_frame; int trig_left, gap_left;
     int cur_code, cur_col, cur_cx, cur_cy, have_target, target_shots; unsigned target_since;
-    int shot_code, shot_col; unsigned shot_frame; int shot_pending;
+    int shot_code, shot_col; unsigned shot_frame; int shot_pending; unsigned freeze_until;
     int last_score, last_lives, last_hit_visible; unsigned last_coin, last_start;
     Cand prev[64]; int nprev;
     char status[160]; unsigned nshots, nhits, npen; int want_mode; char stage_override[160]; struct { int x, y; unsigned f; } rs[8]; int nrs; int shot_score, shot_lives, score_claimed, lives_claimed; struct { unsigned f; int code, col, x, y, sscore, slives, done; double vx, vy, err; } q[8]; int nq; struct { int x, y, code, hit; unsigned f; } hist[32]; int nhist, hist_head;
@@ -263,6 +263,12 @@ void nb1_bot_step(Nb1Bot *b, const Nb1State *st, const Nb1GameInfo *g, unsigned 
             if (cs[j].wt > cs[i].wt) { cs[i].code = cs[j].code; cs[i].col = cs[j].col; cs[i].wt = cs[j].wt; cs[i].pri = cs[j].pri; cs[i].ox = cs[j].ox; cs[i].oy = cs[j].oy; }
             cs[i].cx = (ux0 + ux1) / 2; cs[i].cy = (uy0 + uy1) / 2; cs[i].w = ux1 - ux0; cs[i].h = uy1 - uy0; cs[j] = cs[--nc]; j = i; }
     }
+    /* the game judges a shot about 4 frames after the trigger goes down (the screen flashes white at +4): the crosshair must stay where it was aimed until then, or the shot lands on the NEXT target */
+    if (frame < b->freeze_until) {
+        if (b->trig_left > 0) b->trig_left -= (int)dfr;
+        b->nprev = nc < 64 ? nc : 64; memcpy(b->prev, cs, (size_t)b->nprev * sizeof *cs);
+        *sx = b->ax; *sy = b->ay; *trig = b->trig_left > 0; *coin = *start = 0; credits(b, g, frame, coin, start); return;
+    }
     /* choose the target: keep the current one while it is still there and has not had its chances */
     Cand *pick = NULL; double best = -1; int pick_supp = 0;
     for (int i = 0; i < nc; i++) {
@@ -289,7 +295,7 @@ void nb1_bot_step(Nb1Bot *b, const Nb1State *st, const Nb1GameInfo *g, unsigned 
         double ex = tx - b->ax, ey = ty - b->ay;
         if (b->trig_left > 0) { b->trig_left -= (int)dfr; }
         else if (b->gap_left > 0) { b->gap_left -= (int)dfr; }
-        else if (ex * ex + ey * ey < (pick->w <= 18 && pick->h <= 18 ? 1.5 * 1.5 : 5.0 * 5.0) && st && pick->wt >= b->d.fire_min && !pick_supp) { b->trig_left = (int)b->d.hold; b->gap_left = (int)(b->stage && b->stage->has_gap ? b->stage->gap : b->d.gap); b->shot_code = pick->code; b->shot_col = pick->col; b->shot_frame = frame; if (b->stage && b->stage->norder) { int idx = -1; for (int q = 0; q < b->stage->norder; q++) if (b->stage->order[q] == pick->code) idx = q; if (idx >= 0 && idx != g_true_min && g_nlock < 32) { g_lock_code[g_nlock] = pick->code; g_lock_until[g_nlock++] = frame + 250; if (getenv("NB1_BOT_DEBUG")) fprintf(stderr, "lock number %d until f%u\n", idx + 1, frame + 250); } } if (b->nq < 8) { b->q[b->nq].f = frame; b->q[b->nq].code = pick->code; b->q[b->nq].col = pick->col; b->q[b->nq].x = pick->cx; b->q[b->nq].y = pick->cy; b->q[b->nq].vx = vx; b->q[b->nq].vy = vy; b->q[b->nq].err = sqrt(ex * ex + ey * ey); b->q[b->nq].sscore = g && g->valid ? g->score : 1 << 30; b->q[b->nq].slives = g && g->valid ? g->lives : 0;      /* no game numbers yet: this shot can be judged neither a hit nor a penalty */ b->q[b->nq].done = 0; b->nq++; } for (int q = 7; q > 0; q--) b->rs[q] = b->rs[q - 1]; b->rs[0].x = pick->cx; b->rs[0].y = pick->cy; b->rs[0].f = frame; if (b->nrs < 8) b->nrs++; b->shot_pending = 1; b->target_shots++; b->nshots++;
+        else if (ex * ex + ey * ey < (pick->w <= 18 && pick->h <= 18 ? 1.5 * 1.5 : 5.0 * 5.0) && st && pick->wt >= b->d.fire_min && !pick_supp) { b->trig_left = (int)b->d.hold; b->freeze_until = frame + (getenv("NB1_BOT_FREEZE") ? (unsigned)atoi(getenv("NB1_BOT_FREEZE")) : 5); b->gap_left = (int)(b->stage && b->stage->has_gap ? b->stage->gap : b->d.gap); b->shot_code = pick->code; b->shot_col = pick->col; b->shot_frame = frame; if (b->stage && b->stage->norder) { int idx = -1; for (int q = 0; q < b->stage->norder; q++) if (b->stage->order[q] == pick->code) idx = q; if (idx >= 0 && idx != g_true_min && g_nlock < 32) { g_lock_code[g_nlock] = pick->code; g_lock_until[g_nlock++] = frame + 250; if (getenv("NB1_BOT_DEBUG")) fprintf(stderr, "lock number %d until f%u\n", idx + 1, frame + 250); } } if (b->nq < 8) { b->q[b->nq].f = frame; b->q[b->nq].code = pick->code; b->q[b->nq].col = pick->col; b->q[b->nq].x = pick->cx; b->q[b->nq].y = pick->cy; b->q[b->nq].vx = vx; b->q[b->nq].vy = vy; b->q[b->nq].err = sqrt(ex * ex + ey * ey); b->q[b->nq].sscore = g && g->valid ? g->score : 1 << 30; b->q[b->nq].slives = g && g->valid ? g->lives : 0;      /* no game numbers yet: this shot can be judged neither a hit nor a penalty */ b->q[b->nq].done = 0; b->nq++; } for (int q = 7; q > 0; q--) b->rs[q] = b->rs[q - 1]; b->rs[0].x = pick->cx; b->rs[0].y = pick->cy; b->rs[0].f = frame; if (b->nrs < 8) b->nrs++; b->shot_pending = 1; b->target_shots++; b->nshots++;
                                                          if (g && g->valid) { b->last_score = g->score; b->last_lives = g->lives; b->shot_score = g->score; b->shot_lives = g->lives; } }
         snprintf(b->status, sizeof b->status, "auto: target code %d col %d (w %.2f)  shots %u hits %u penalties %u", pick->code, pick->col, pick->wt, b->nshots, b->nhits, b->npen);
     } else {
