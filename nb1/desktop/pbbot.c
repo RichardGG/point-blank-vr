@@ -160,6 +160,7 @@ int main(int argc, char **argv) {
                 unsigned since = fr - intro_enter;
                 if (skip_n < 2 && since >= 24 + 70u * skip_n && fr - skip_last >= 60) { skip_n++; skip_last = fr; }
                 if (skip_last && fr - skip_last < 10) start = 1; }
+            if (ph != NB1_FLOW_PLAY && ph != NB1_FLOW_CARD_SELECT && ph != NB1_FLOW_JUDGEMENT && !(ph == NB1_FLOW_INTRO && nb1_flow_type(flow) >= 0)) { unsigned since = fr - intro_enter; if (since >= 150 && since % 120 < 10) start = 1; }      /* anything else that waits for a button (the BONUS STAGE title): press Start now and then
             if (ph == NB1_FLOW_JUDGEMENT) { unsigned since = fr - intro_enter; if (since >= 100 && since % 90 < 10) start = 1; }      /* the result panel: the verdict (FAILED / QUOTA COMPLETE) has been read by now, Start moves on */
         } if (card_goal >= 0 && flow && nb1_flow_phase(flow) == NB1_FLOW_CARD_SELECT && !card_wait) { sx = (CBOX[card_goal][0] + CBOX[card_goal][2]) / 2.0; sy = (CBOX[card_goal][1] + CBOX[card_goal][3]) / 2.0 + 6; trig = (card_steps % 24) >= 4 && (card_steps % 24) < 8; card_steps++; }      /* shoot the card it chose, in the middle, a few times if the first shot is missed */ Nb1State *st0 = st; steps++;
         if (movie_dir && have_roms && steps % (unsigned long)(movie_every / 2 > 0 ? movie_every / 2 : 1) == 0) {                 /* every Nth published state: the picture with the gun's aim marked (red cross; yellow while the trigger is held) */
