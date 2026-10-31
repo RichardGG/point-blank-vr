@@ -14,7 +14,7 @@
 typedef struct { int code_lo, code_hi, col_lo, col_hi, pri_lo, pri_hi; double weight, ax, ay; } BSel;
 typedef struct { char name[64]; int only; BSel *prefer, *avoid; int np, na; } BScene;
 typedef struct { int code, col; double n, hits, pen; } BKey;
-typedef struct { char id[160]; char text[160]; BKey *keys; int nkeys, cap; BScene sc; int has_sc; int *order, norder; int match_sample, multihit, has_lead, has_gap, nearest, aim_visible; double lead, gap, vis_min; } BStage;       /* what one stage (difficulty, stage counter, card) has taught: its own sprite statistics and the sentence the game shows before it */
+typedef struct { char id[160]; char text[160]; BKey *keys; int nkeys, cap; BScene sc; int has_sc; int *order, norder; int match_sample, multihit, has_lead, has_gap, nearest, aim_visible; double lead, gap, vis_min, aim_frac, vis_min_big; } BStage;       /* what one stage (difficulty, stage counter, card) has taught: its own sprite statistics and the sentence the game shows before it */
 typedef struct { int code, col, pri, cx, cy, w, h; double wt; int still; double ox, oy; } Cand;       /* still: frames it has been at the same place (scenery) */
 typedef struct { double min_size, max_size, unknown, speed, gap, hold, lead, fire_min; } BDef;
 
@@ -74,7 +74,7 @@ Nb1Bot *nb1_bot_new(const char *rules_path) {
             if ((v = json_get(o, "text")) && v->t == J_STR) snprintf(g->text, sizeof g->text, "%s", v->str);
             g->has_sc = 1; g->sc.only = (v = json_get(o, "only")) && v->num != 0; g->sc.np = sel_parse(json_get(o, "prefer"), &g->sc.prefer); g->sc.na = sel_parse(json_get(o, "avoid"), &g->sc.avoid);
             if ((v = json_get(o, "order")) && v->t == J_ARR) { g->norder = v->n; g->order = malloc((size_t)(v->n ? v->n : 1) * sizeof *g->order); for (int q = 0; q < v->n; q++) g->order[q] = (int)v->kid[q]->num; }   /* codes to shoot in this sequence */
-            g->match_sample = (v = json_get(o, "match_sample")) && v->num != 0; g->multihit = (v = json_get(o, "multihit")) && v->num != 0; if ((v = json_get(o, "lead"))) { g->lead = v->num; g->has_lead = 1; } if ((v = json_get(o, "gap"))) { g->gap = v->num; g->has_gap = 1; } g->nearest = (v = json_get(o, "nearest")) && v->num != 0; g->aim_visible = (v = json_get(o, "aim_visible")) && v->num != 0; g->vis_min = (v = json_get(o, "vis_min")) ? v->num : 0;
+            g->match_sample = (v = json_get(o, "match_sample")) && v->num != 0; g->multihit = (v = json_get(o, "multihit")) && v->num != 0; if ((v = json_get(o, "lead"))) { g->lead = v->num; g->has_lead = 1; } if ((v = json_get(o, "gap"))) { g->gap = v->num; g->has_gap = 1; } g->nearest = (v = json_get(o, "nearest")) && v->num != 0; g->aim_visible = (v = json_get(o, "aim_visible")) && v->num != 0; g->vis_min = (v = json_get(o, "vis_min")) ? v->num : 0; g->vis_min_big = (v = json_get(o, "vis_min_big")) ? v->num : -1; g->aim_frac = (v = json_get(o, "aim_frac")) ? v->num : -1;
             const Json *kk = json_get(o, "keys"); if (kk && kk->t == J_ARR) for (int q = 0; q < kk->n; q++) { const Json *r = kk->kid[q]; if (r->t != J_ARR || r->n < 5) continue;
                 BKey *k = keys_get(&g->keys, &g->nkeys, &g->cap, (int)r->kid[0]->num, (int)r->kid[1]->num, 1); k->n = r->kid[2]->num; k->hits = r->kid[3]->num; k->pen = r->kid[4]->num; } } }
     const Json *sc = json_get(j, "scenes");
@@ -184,7 +184,7 @@ void nb1_bot_step(Nb1Bot *b, const Nb1State *st, const Nb1GameInfo *g, unsigned 
     if (b->stage && b->stage->match_sample && g_sample_code < 0 && g_sample_keep >= 0 && frame - g_sample_f < 150) g_sample_code = g_sample_keep;      /* the sample sprite is missing on some frames (it animates / changes between rounds): keep the last one for a couple of seconds */
     unsigned dfr = b->have_aim && frame > b->last_frame ? frame - b->last_frame : 2; if (dfr > 30) dfr = 30; b->last_frame = frame;
     static int v_tot[256], v_vis[256]; static float v_cx[256], v_cy[256]; int have_vis = 0;
-    if (b->roms && b->stage && (b->stage->vis_min > 0 || b->stage->aim_visible)) { nb1_sprite_visibility(st, b->roms, ents, ne, v_tot, v_vis, v_cx, v_cy); have_vis = 1; }      /* which parts of each sprite are not covered by a later sprite */
+    if (b->roms && b->stage && (b->stage->vis_min > 0 || b->stage->aim_visible || b->stage->aim_frac >= 0)) { nb1_sprite_visibility(st, b->roms, ents, ne, v_tot, v_vis, v_cx, v_cy); have_vis = 1; }      /* which parts of each sprite are not covered by a later sprite */
     /* "type the same 3-letter word": the word is three dotted 2x2-tile letter sprites near the top (tile numbers 3651..3738, alphabetical: A 3651 ... Y 3734; typed letters turn solid = tile - 96);
        shoot the matching key of the on-screen keyboard, in any order (a wrong key costs nothing).  Letter table and key positions: research repo game/stages/type-the-word/letters.json. */
     {
@@ -218,8 +218,12 @@ void nb1_bot_step(Nb1Bot *b, const Nb1State *st, const Nb1GameInfo *g, unsigned 
         c.wt = weight_of(b, &c); c.ox = g_ox; c.oy = g_oy;
         if (have_vis && i < 256 && v_tot[i] >= 20) {
             double frac = (double)v_vis[i] / v_tot[i];
-            if (b->stage->vis_min > 0 && frac < b->stage->vis_min && c.wt >= 1.0) c.wt *= 0.05;      /* a target (preferred sprite) mostly hidden behind other sprites: wait until it shows (a shot there hits the cover) */
-            if (b->stage->aim_visible && v_vis[i] >= 10) { c.cx = (int)(v_cx[i] + 0.5f); c.cy = (int)(v_cy[i] + 0.5f); }      /* aim at the part that can be seen */
+            double vmin = b->stage->vis_min; if (b->stage->vis_min_big >= 0 && (c.w >= 45 || c.h >= 45)) vmin = b->stage->vis_min_big;      /* big (near) targets may be covered more: they are the ones that matter */
+            if (vmin > 0 && frac < vmin && c.wt >= 1.0) c.wt *= 0.05;      /* a target (preferred sprite) mostly hidden behind other sprites: wait until it shows (a shot there hits the cover) */
+            if (b->stage->aim_frac >= 0 && v_vis[i] >= 10) {      /* aim a fraction of the sprite height below the top of its visible part (the very top edge misses big tanks) */
+                float ax2; int topy; nb1_visible_at_row(i, 0, 0, &ax2, &topy);
+                if (topy >= 0) { int row = topy + (int)(b->stage->aim_frac * c.h + 0.5); float rx; int n = nb1_visible_at_row(i, row, 2, &rx, NULL); if (n >= 3) { c.cx = (int)(rx + 0.5f); c.cy = row; } else { c.cx = (int)(v_cx[i] + 0.5f); c.cy = (int)(v_cy[i] + 0.5f); } }
+            } else if (b->stage->aim_visible && v_vis[i] >= 10) { c.cx = (int)(v_cx[i] + 0.5f); c.cy = (int)(v_cy[i] + 0.5f); }      /* aim at the part that can be seen */
         }
         if (c.wt > 0) cs[nc++] = c;
     }

@@ -337,9 +337,10 @@ void nb1_render_composite(const Nb1State *st, const Nb1State *sst, const Nb1Roms
 
 /* How much of each sprite entry is really on screen: sprites are drawn in list order and the last opaque pixel wins (as the arcade's C355 does here), so a later sprite
  * (sandbags, a mound) hides what is under it.  total[i] = opaque pixels of entry i inside the screen, visible[i] = those that nobody drew over, (vcx, vcy) = their centre. */
+static int16_t g_who[NB1_H][NB1_W];                                  /* the last visibility map: which entry's pixel is on top at each screen pixel (-1 none) */
 void nb1_sprite_visibility(const Nb1State *st, const Nb1Roms *roms, const Nb1Entry *ents, int ne, int *total, int *visible, float *vcx, float *vcy) {
-    static int16_t who[NB1_H][NB1_W]; static int xi[4096], yi[4096]; static double sx[256], sy[256];
-    memset(who, 0xff, sizeof who);
+    int16_t (*who)[NB1_W] = g_who; static int xi[4096], yi[4096]; static double sx[256], sy[256];
+    memset(g_who, 0xff, sizeof g_who);
     for (int i = 0; i < ne && i < 256; i++) { total[i] = visible[i] = 0; vcx[i] = vcy[i] = 0; sx[i] = sy[i] = 0; }
     for (int i = 0; i < ne && i < 256; i++) {
         const Nb1Entry *sp = &ents[i];
@@ -352,4 +353,12 @@ void nb1_sprite_visibility(const Nb1State *st, const Nb1Roms *roms, const Nb1Ent
     }
     for (int Y = 0; Y < NB1_H; Y++) for (int X = 0; X < NB1_W; X++) { int w = who[Y][X]; if (w >= 0) { visible[w]++; sx[w] += X; sy[w] += Y; } }
     for (int i = 0; i < ne && i < 256; i++) if (visible[i]) { vcx[i] = (float)(sx[i] / visible[i]); vcy[i] = (float)(sy[i] / visible[i]); }
+}
+
+
+/* Of the last nb1_sprite_visibility() call: the visible pixels of entry i in the rows y-band..y+band: their count and mean x (-1 if none).  Also the topmost visible row of the entry (-1 if none). */
+int nb1_visible_at_row(int entry, int y, int band, float *x, int *top_y) {
+    double sx = 0; int n = 0; if (top_y) { *top_y = -1; for (int Y = 0; Y < NB1_H && *top_y < 0; Y++) for (int X = 0; X < NB1_W; X++) if (g_who[Y][X] == entry) { *top_y = Y; break; } }
+    for (int Y = y - band; Y <= y + band; Y++) { if (Y < 0 || Y >= NB1_H) continue; for (int X = 0; X < NB1_W; X++) if (g_who[Y][X] == entry) { sx += X; n++; } }
+    *x = n ? (float)(sx / n) : -1; return n;
 }

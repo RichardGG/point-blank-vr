@@ -43,6 +43,7 @@ typedef struct { int x0, y0, w, h; uint8_t *rgba; int32_t *pen; } Nb1Tex;
 int nb1_entry_tex(const Nb1State *st, const Nb1Roms *roms, const Nb1Entry *sp, uint8_t rgb[0x2000][3], Nb1Tex *out);
 /* Per sprite entry: opaque pixels on screen, pixels not drawn over by a later entry, and their centre (arrays of ne <= 256). */
 void nb1_sprite_visibility(const Nb1State *st, const Nb1Roms *roms, const Nb1Entry *ents, int ne, int *total, int *visible, float *vcx, float *vcy);
+int nb1_visible_at_row(int entry, int y, int band, float *x, int *top_y);     /* after nb1_sprite_visibility(): visible pixels of an entry in rows y-band..y+band (count, mean x) and its topmost visible row */
 /* One tilemap layer, full screen: rgba[224][288][4], pen[224][288] (-1 empty). */
 void nb1_tilemap_tex(const Nb1State *st, const Nb1Roms *roms, int i, uint8_t rgb[0x2000][3], uint8_t *rgba, int32_t *pen);
 
