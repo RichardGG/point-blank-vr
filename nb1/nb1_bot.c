@@ -108,7 +108,8 @@ int nb1_bot_save_stats(const Nb1Bot *b, const char *path) {
 }
 
 static unsigned g_frame = 0;
-static int g_order_min = 1 << 30;                                    /* lowest position in the stage's "order" among the targets visible now */
+static int g_order_min = 1 << 30, g_true_min = 1 << 30;           /* g_true_min: the real lowest (g_order_min can be forced by the NB1_BOT_WRONG5 test) */
+static int g_lock_code[32]; static unsigned g_lock_until[32]; static int g_nlock;      /* numbers shot out of order lock for about 4 s (seen: the tile greys out, 240 frames) */                                    /* lowest position in the stage's "order" among the targets visible now */
 static int g_sample_code = -1, g_sample_keep = -1; static unsigned g_sample_f = 0;                                       /* the code of the SAMPLE target in a "match the sample" stage */
 static double g_ox, g_oy;                                                    /* aim offset of the prefer entry that matched the last weight_of() call */
 static double weight_of(Nb1Bot *b, const Cand *c) {
@@ -137,7 +138,8 @@ static double weight_of(Nb1Bot *b, const Cand *c) {
     if (spot_dead && w > 0.2) w = 0.2;                                           /* a preferred target that keeps missing at the same spot (already gone / not hittable there): a stage's prefer weight does not revive it */
     if (b->stage && b->stage->norder) {
         int idx = -1; for (int i = 0; i < b->stage->norder; i++) if (b->stage->order[i] == c->code) { idx = i; break; }
-        if (idx >= 0) w = idx == g_order_min ? 12.0 : 0.01; else w *= 0.05;
+        if (idx >= 0) { w = idx == g_order_min ? 12.0 : 0.01; for (int q = 0; q < g_nlock; q++) if (g_lock_code[q] == c->code && g_frame < g_lock_until[q]) w = 0.01; }      /* the wanted number is locked: wait for it, shoot nothing else */
+        else w *= 0.05;
     }
     if (b->stage && b->stage->match_sample) { if (g_sample_code >= 0 && c->code != g_sample_code) w *= 0.02; if (g_sample_code >= 0 && c->code == g_sample_code && c->cy < 62 && abs(c->cx - 145) < 30) return 0; }      /* never the sample picture itself */
     if (b->cur) {
@@ -170,8 +172,10 @@ void nb1_bot_step(Nb1Bot *b, const Nb1State *st, const Nb1GameInfo *g, unsigned 
     }
     static Nb1Entry ents[256]; int ne = nb1_sprite_entries(st, ents); Cand cs[256]; int nc = 0, hit_visible = 0;
     g_order_min = 1 << 30; g_sample_code = -1; g_frame = frame;
+    { int w = 0; for (int q = 0; q < g_nlock; q++) if (g_lock_until[q] > frame) { g_lock_code[w] = g_lock_code[q]; g_lock_until[w++] = g_lock_until[q]; } g_nlock = w; }      /* drop expired locks */
     if (b->stage && b->stage->norder) for (int i = 0; i < ne; i++) { const Nb1Entry *e = &ents[i]; if (!e->ntiles) continue; int t0 = e->tiles[0].t, code = (((t0 & 0x7ff) | (st->bank[(t0 >> 11) & 7] << 11)) + e->offset) & 0x7fff;
         for (int q = 0; q < b->stage->norder; q++) if (b->stage->order[q] == code && q < g_order_min) g_order_min = q; }
+    g_true_min = g_order_min; { static int wrong_done; if (getenv("NB1_BOT_WRONG5") && !wrong_done && b->stage && b->stage->norder && g_order_min == 0) g_order_min = 4; if (g_order_min != g_true_min && b->shot_pending) wrong_done = 1; }      /* test: shoot number 5 first, to see the lock and the recovery */
     if (b->stage && b->stage->match_sample) for (int i = 0; i < ne; i++) {      /* "find the matching target": the SAMPLE animal is the 48x48 sprite at the top middle (its frame is code 14483); the targets are the same sprite frames, so a match has the same code */
         const Nb1Entry *e = &ents[i]; if (!e->ntiles) continue; int x0 = e->tiles[0].x, y0 = e->tiles[0].y, x1 = x0, y1 = y0; for (int k = 0; k < e->ntiles; k++) { const Nb1Tile *t = &e->tiles[k]; if (t->x < x0) x0 = t->x; if (t->y < y0) y0 = t->y; if (t->x + t->w > x1) x1 = t->x + t->w; if (t->y + t->h > y1) y1 = t->y + t->h; }
         int t0 = e->tiles[0].t, code = (((t0 & 0x7ff) | (st->bank[(t0 >> 11) & 7] << 11)) + e->offset) & 0x7fff;
@@ -221,6 +225,10 @@ void nb1_bot_step(Nb1Bot *b, const Nb1State *st, const Nb1GameInfo *g, unsigned 
         if (!hit && !pen && banner_edge && age >= 4 && age <= 18) { hit = 1; banner_edge = 0; }          /* the HIT! banner appears 7-8 frames after the shot: a hit the score word did not show (stages where the score does not jump by 10) */
         if (hit && age > 16) hit = 0;                                                   /* a hit shows in the score within a few frames: a later rise is some other shot's */
         if (!pen && !hit && age <= 40) continue;
+        if (!pen && !hit && b->stage && b->stage->norder && g_nlock < 32) {                      /* a numbers stage: the shot at a number did not remove it: it is locked (a number shot out of order, or while the previous one was still being scored): wait ~4 s before the next try */
+            int present = 0; for (int e2 = 0; e2 < ne; e2++) { const Nb1Entry *e = &ents[e2]; if (!e->ntiles) continue; int t0 = e->tiles[0].t, code = (((t0 & 0x7ff) | (st->bank[(t0 >> 11) & 7] << 11)) + e->offset) & 0x7fff; if (code == b->q[i].code) present = 1; }
+            if (present) { g_lock_code[g_nlock] = b->q[i].code; g_lock_until[g_nlock++] = frame + 250; if (getenv("NB1_BOT_DEBUG")) fprintf(stderr, "lock (shot did not remove it) code %d until f%u\n", b->q[i].code, frame + 250); }
+        }
         BKey *k = key_get(b, b->q[i].code, b->q[i].col, 1), *sk = skey_get(b, b->q[i].code, b->q[i].col, 1);
         k->n++; if (sk) sk->n++;
         if (pen) { k->pen++; if (sk) sk->pen++; b->npen++; if (g) b->lives_claimed = g->lives; }
@@ -264,7 +272,7 @@ void nb1_bot_step(Nb1Bot *b, const Nb1State *st, const Nb1GameInfo *g, unsigned 
         double ex = tx - b->ax, ey = ty - b->ay;
         if (b->trig_left > 0) { b->trig_left -= (int)dfr; }
         else if (b->gap_left > 0) { b->gap_left -= (int)dfr; }
-        else if (ex * ex + ey * ey < (pick->w <= 18 && pick->h <= 18 ? 1.5 * 1.5 : 5.0 * 5.0) && st && pick->wt >= b->d.fire_min && !pick_supp) { b->trig_left = (int)b->d.hold; b->gap_left = (int)b->d.gap; b->shot_code = pick->code; b->shot_col = pick->col; b->shot_frame = frame; if (b->nq < 8) { b->q[b->nq].f = frame; b->q[b->nq].code = pick->code; b->q[b->nq].col = pick->col; b->q[b->nq].x = pick->cx; b->q[b->nq].y = pick->cy; b->q[b->nq].vx = vx; b->q[b->nq].vy = vy; b->q[b->nq].err = sqrt(ex * ex + ey * ey); b->q[b->nq].sscore = g && g->valid ? g->score : 1 << 30; b->q[b->nq].slives = g && g->valid ? g->lives : 0;      /* no game numbers yet: this shot can be judged neither a hit nor a penalty */ b->q[b->nq].done = 0; b->nq++; } for (int q = 7; q > 0; q--) b->rs[q] = b->rs[q - 1]; b->rs[0].x = pick->cx; b->rs[0].y = pick->cy; b->rs[0].f = frame; if (b->nrs < 8) b->nrs++; b->shot_pending = 1; b->target_shots++; b->nshots++;
+        else if (ex * ex + ey * ey < (pick->w <= 18 && pick->h <= 18 ? 1.5 * 1.5 : 5.0 * 5.0) && st && pick->wt >= b->d.fire_min && !pick_supp) { b->trig_left = (int)b->d.hold; b->gap_left = (int)b->d.gap; b->shot_code = pick->code; b->shot_col = pick->col; b->shot_frame = frame; if (b->stage && b->stage->norder) { int idx = -1; for (int q = 0; q < b->stage->norder; q++) if (b->stage->order[q] == pick->code) idx = q; if (idx >= 0 && idx != g_true_min && g_nlock < 32) { g_lock_code[g_nlock] = pick->code; g_lock_until[g_nlock++] = frame + 250; if (getenv("NB1_BOT_DEBUG")) fprintf(stderr, "lock number %d until f%u\n", idx + 1, frame + 250); } } if (b->nq < 8) { b->q[b->nq].f = frame; b->q[b->nq].code = pick->code; b->q[b->nq].col = pick->col; b->q[b->nq].x = pick->cx; b->q[b->nq].y = pick->cy; b->q[b->nq].vx = vx; b->q[b->nq].vy = vy; b->q[b->nq].err = sqrt(ex * ex + ey * ey); b->q[b->nq].sscore = g && g->valid ? g->score : 1 << 30; b->q[b->nq].slives = g && g->valid ? g->lives : 0;      /* no game numbers yet: this shot can be judged neither a hit nor a penalty */ b->q[b->nq].done = 0; b->nq++; } for (int q = 7; q > 0; q--) b->rs[q] = b->rs[q - 1]; b->rs[0].x = pick->cx; b->rs[0].y = pick->cy; b->rs[0].f = frame; if (b->nrs < 8) b->nrs++; b->shot_pending = 1; b->target_shots++; b->nshots++;
                                                          if (g && g->valid) { b->last_score = g->score; b->last_lives = g->lives; b->shot_score = g->score; b->shot_lives = g->lives; } }
         snprintf(b->status, sizeof b->status, "auto: target code %d col %d (w %.2f)  shots %u hits %u penalties %u", pick->code, pick->col, pick->wt, b->nshots, b->nhits, b->npen);
     } else {
